@@ -80,8 +80,9 @@ fun duration(millis: Long): String {
 }
 
 fun headline(check: Check): String {
-    val high = check.findings.count { it.verdict.severity == Severity.High }
-    val medium = check.findings.count { it.verdict.severity == Severity.Medium }
+    val flags = check.findings.flatMap { it.verdict.flags }.toSet()
+    val high = flags.count { it.severity == Severity.High }
+    val medium = flags.count { it.severity == Severity.Medium }
     val text = when {
         high > 0 -> plural(high, "serious term")
         medium > 0 -> "${plural(medium, "term")} worth knowing"
