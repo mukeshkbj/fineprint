@@ -65,10 +65,20 @@
 
   <template id="unreadable">
     <section class="intro">
-      <h1 class="title">Fineprint can’t read this page</h1>
-      <p class="lede">Open a page with terms of service, then click the Fineprint icon in the toolbar. Chrome pages and the Web Store stay off limits.</p>
+      <h1 class="title"></h1>
+      <p class="lede"></p>
       <button type="button" class="button" data-action="refresh">Try again</button>
     </section>
+  </template>
+
+  <template id="sites">
+    <div class="setting">
+      <div class="setting-copy">
+        <h2 class="setting-title">Grade terms on sign-up forms</h2>
+        <p class="setting-text">Puts a grade next to “I agree to the terms” links on any site, and reads any tab without a click. The terms are still checked only on this computer.</p>
+      </div>
+      <button type="button" class="button small" data-action="sites"></button>
+    </div>
   </template>
 
   <template id="report">

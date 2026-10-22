@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { gradeOf, normalize, parseReply, splitClauses } from "./lib.js";
+import { gradeOf, htmlToText, normalize, parseReply, splitClauses } from "./lib.js";
 
 assert.equal(normalize("  You AGREE\n\tto   Arbitration. "), "you agree to arbitration.");
 
@@ -35,5 +35,13 @@ assert.equal(gradeOf([finding("jurisdiction")]), "B");
 assert.equal(gradeOf([finding("arbitration"), finding("arbitration")]), "C");
 assert.equal(gradeOf([finding("arbitration", "unilateral_change"), finding("jurisdiction")]), "D");
 assert.equal(gradeOf([finding("arbitration", "unilateral_change"), finding("limitation_of_liability", "unilateral_termination")]), "E");
+
+const page = `<html><head><title>x</title><style>p{}</style></head><body><nav>Home</nav><main>
+<h1>Terms</h1><p>We may change these Terms&nbsp;at any time &amp; without notice.</p><script>var a = "<p>no</p>";</script>
+<p>You waive your right to a jury trial &#8212; disputes go to arbitration.<br>See &#x41;bove.</p></main><footer>Footer</footer></body></html>`;
+assert.deepEqual(splitClauses(htmlToText(page)), [
+  "We may change these Terms at any time & without notice.",
+  "You waive your right to a jury trial — disputes go to arbitration.",
+]);
 
 console.log("ok");

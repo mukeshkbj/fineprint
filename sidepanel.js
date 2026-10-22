@@ -50,14 +50,30 @@ function render() {
   server.dataset.state = view?.server ?? "unknown";
   document.getElementById("server-text").textContent = `${MODELS[model].label} model on port ${MODELS[model].port} · ${SERVER_TEXT[view?.server] ?? "Checking"}`;
   if (!view) return;
-  if (!view.page.readable) return show("unreadable", "unreadable");
+  if (!view.page.readable) return renderUnreadable();
   const job = view.job;
   if (!job || job.status === "empty") return renderIntro(job);
   renderReport(job);
 }
 
+function renderUnreadable() {
+  const root = show(`unreadable|${view.granted}`, "unreadable");
+  root.querySelector(".title").textContent = view.granted ? "Fineprint can’t read this page" : "Click the Fineprint icon to read this tab";
+  root.querySelector(".lede").textContent = view.granted
+    ? "Chrome pages, the Web Store, and the PDF viewer stay off limits. Open the terms as a web page and check again."
+    : "Chrome lets Fineprint read a page after you click its icon on that page. Chrome pages and the Web Store stay off limits.";
+  renderSites(root);
+}
+
+function renderSites(root) {
+  const setting = root.querySelector(".setting") ?? root.appendChild(clone("sites"));
+  setting.querySelector("button").textContent = view.granted ? "Turn off" : "Turn on";
+  setting.dataset.on = view.granted;
+}
+
 function renderIntro(job) {
   const root = show(`intro|${model}`, "intro");
+  renderSites(root);
   const action = root.querySelector(".intro-action");
   if (view.server === "offline") {
     if (!action.querySelector(".notice")) action.replaceChildren(offlineNotice());
@@ -324,6 +340,11 @@ screen.addEventListener("click", async (event) => {
   }
   if (action === "stop") send({ type: "stop", tabId });
   if (action === "refresh") refresh();
+  if (action === "sites") {
+    const origins = { origins: ["<all_urls>"] };
+    await (view.granted ? chrome.permissions.remove(origins) : chrome.permissions.request(origins));
+    refresh();
+  }
   if (action === "copy") {
     const notice = event.target.closest(".notice");
     await navigator.clipboard.writeText(notice.querySelector("code").textContent);

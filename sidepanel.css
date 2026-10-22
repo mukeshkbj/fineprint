@@ -272,6 +272,32 @@ button { font: inherit; color: inherit; }
   text-wrap: pretty;
 }
 
+.setting {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--sunken);
+}
+
+.setting-copy { display: grid; gap: 3px; }
+
+.setting-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.setting-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+
 .check {
   display: grid;
   gap: 10px;

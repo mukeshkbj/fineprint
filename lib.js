@@ -66,3 +66,18 @@ export function gradeOf(findings) {
   if (high === 0) return count("medium") === 0 ? "A" : "B";
   return "CDE"[Math.min(high, 3) - 1];
 }
+
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", mdash: "—", ndash: "–", hellip: "…" };
+
+export function htmlToText(html) {
+  const body = html.match(/<main[\s>][\s\S]*<\/main>/i)?.[0] ?? html.match(/<article[\s>][\s\S]*<\/article>/i)?.[0] ?? html;
+  return body
+    .replace(/<(script|style|noscript|svg|template|head)[\s>][\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6]|section|tr|blockquote|ul|ol|table|article|header|footer|dd|dt)>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) =>
+      code[0] !== "#" ? ENTITIES[code.toLowerCase()] ?? entity
+      : String.fromCodePoint(code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : Number(code.slice(1))))
+    .replace(/[ \t]+/g, " ");
+}
