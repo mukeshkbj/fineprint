@@ -125,7 +125,7 @@ fun Pill(check: Check, expanded: Boolean, leaving: Boolean, modifier: Modifier =
     val palette = LocalPalette.current
     val reduce = LocalReduceMotion.current
     val grade = check.grade.takeIf { check.done > 0 && check.problem == null }
-    val enter = remember(check.key) { Animatable(0f) }
+    val enter = remember { Animatable(0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, Motion.large()) }
     val exit by animateFloatAsState(if (leaving) 0f else 1f, Motion.exit(), label = "exit")
     val presence = enter.value * exit
@@ -134,14 +134,14 @@ fun Pill(check: Check, expanded: Boolean, leaving: Boolean, modifier: Modifier =
     val progress by animateFloatAsState(if (check.total == 0) 0f else check.done.toFloat() / check.total, Motion.small(), label = "ring")
     Row(
         modifier
-            .padding(10.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 18.dp)
             .graphicsLayer {
                 alpha = presence.coerceIn(0f, 1f)
                 val s = if (reduce) 1f else 0.9f + 0.1f * presence
                 scaleX = s
                 scaleY = s
             }
-            .shadow(10.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.5f))
+            .shadow(8.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.45f), spotColor = Color.Black.copy(alpha = 0.45f))
             .background(palette.surface, CircleShape)
             .border(1.dp, palette.rule, CircleShape)
             .padding(5.dp)
@@ -203,16 +203,28 @@ fun DismissTarget(hot: Boolean) {
 }
 
 @Composable
-fun Highlight() {
+fun Highlight(lines: List<android.graphics.Rect>) {
     val palette = LocalPalette.current
     val enter = remember { Animatable(0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, Motion.large()) }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .alpha(enter.value)
-            .background(palette.mark.copy(alpha = if (palette.dark) 0.28f else 0.34f), RoundedCornerShape(4.dp)),
-    )
+    val color = palette.mark
+    val strength = if (palette.dark) 0.3f else 0.36f
+    Canvas(
+        Modifier.fillMaxSize().graphicsLayer {
+            alpha = enter.value * strength
+            compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+        },
+    ) {
+        val radius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+        lines.forEach { line ->
+            drawRoundRect(
+                color,
+                Offset(line.left.toFloat(), line.top.toFloat()),
+                androidx.compose.ui.geometry.Size(line.width().toFloat(), line.height().toFloat()),
+                radius,
+            )
+        }
+    }
 }
 
 enum class Glyph { Close, Previous, Next, Check }

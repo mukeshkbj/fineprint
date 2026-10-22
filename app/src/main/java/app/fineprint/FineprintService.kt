@@ -46,6 +46,7 @@ class FineprintService : AccessibilityService() {
     private var scanJob: Job? = null
     private var scanDue = 0L
     private var firstEvent = 0L
+    private var retries = 0
     private var doc: Doc? = null
     private var docKey by mutableStateOf<String?>(null)
     private var dismissed: String? = null
@@ -55,6 +56,9 @@ class FineprintService : AccessibilityService() {
     private var target: OverlayWindow? = null
     private var highlight: OverlayWindow? = null
     private var marked: AccessibilityNodeInfo? = null
+    private var markTop = 0
+    private var markLines: List<Rect> = emptyList()
+    private val markShape = mutableStateOf<List<Rect>>(emptyList())
 
     private var leaving = mutableStateOf(false)
     private var hot by mutableStateOf(false)
@@ -74,7 +78,10 @@ class FineprintService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.packageName == packageName) return
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> schedule(450)
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                retries = 0
+                schedule(450)
+            }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 followMark()
                 schedule(900)
@@ -115,8 +122,10 @@ class FineprintService : AccessibilityService() {
         if (next == null) {
             doc = null
             hidePill()
+            if (retries++ < 3) schedule(1500)
             return
         }
+        retries = 0
         doc = next
         val check = Checker.check(next.clauses, next.source)
         docKey = check.key
@@ -439,8 +448,11 @@ class FineprintService : AccessibilityService() {
             delay(200)
         }
         if (mode != SheetMode.Peek) return true
+        node.refresh()
         marked = node
-        showMark()
+        markTop = topOf(node)
+        markLines = withContext(Dispatchers.Default) { linesOf(node, clause) }.ifEmpty { listOf(Rect().also(node::getBoundsInScreen)) }
+        showMark(0)
         return true
     }
 
@@ -500,36 +512,107 @@ class FineprintService : AccessibilityService() {
         return node.takeIf { own != null && collapse(own).contains(probe) }
     }
 
-    private fun showMark() {
-        val node = marked ?: return
-        node.refresh()
-        val r = Rect().also(node::getBoundsInScreen)
-        val pad = (4 * dp).toInt()
+    private fun topOf(node: AccessibilityNodeInfo) =
+        node.extras.getInt("AccessibilityNodeInfo.unclippedTop", Int.MIN_VALUE).takeIf { it != Int.MIN_VALUE } ?: Rect().also(node::getBoundsInScreen).top
+
+    private fun leavesOf(node: AccessibilityNodeInfo): List<AccessibilityNodeInfo> =
+        if (node.childCount == 0) listOf(node) else (0 until node.childCount).mapNotNull(node::getChild).flatMap(::leavesOf)
+
+    private suspend fun linesOf(node: AccessibilityNodeInfo, clause: String): List<Rect> {
+        val leaves = leavesOf(node)
+        val raw = leaves.joinToString("") { it.text?.toString().orEmpty() }
+        val range = rawRange(raw, clause) ?: return emptyList()
+        repeat(2) { attempt ->
+            val boxes = mutableListOf<android.graphics.RectF>()
+            var coarse = false
+            var offset = 0
+            for (leaf in leaves) {
+                val length = leaf.text?.length ?: 0
+                val start = maxOf(range.first, offset)
+                val end = minOf(range.last + 1, offset + length)
+                if (start < end) {
+                    val args = android.os.Bundle().apply {
+                        putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, start - offset)
+                        putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, end - start)
+                    }
+                    leaf.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
+                    val found = leaf.extras.getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, android.graphics.RectF::class.java)
+                        ?.filterNotNull()?.filter { it.width() > 0 && it.height() > 0 }.orEmpty()
+                    if (found.size > 1 && found.distinct().size == 1) coarse = true
+                    boxes += found
+                }
+                offset += length
+            }
+            if (!coarse) return merge(boxes)
+            delay(200)
+        }
+        return emptyList()
+    }
+
+    private fun merge(boxes: List<android.graphics.RectF>): List<Rect> {
+        val typical = boxes.map { it.height() }.sorted().getOrElse(boxes.size / 2) { 0f }
+        val lines = mutableListOf<android.graphics.RectF>()
+        for (box in boxes.filter { it.height() <= typical * 1.6f }.sortedWith(compareBy({ it.centerY() }, { it.left }))) {
+            val line = lines.lastOrNull()?.takeIf { abs(it.centerY() - box.centerY()) < box.height() / 2 }
+            if (line != null) line.union(box) else lines += android.graphics.RectF(box)
+        }
+        return lines.map { Rect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt()) }
+    }
+
+    private fun rawRange(raw: String, clause: String): IntRange? {
+        val collapsed = StringBuilder()
+        val index = ArrayList<Int>()
+        var space = false
+        raw.forEachIndexed { i, c ->
+            if (c.isWhitespace() || c == '\uFEFF') {
+                space = true
+            } else {
+                if (space && collapsed.isNotEmpty()) {
+                    collapsed.append(' ')
+                    index += i
+                }
+                space = false
+                collapsed.append(c)
+                index += i
+            }
+        }
+        val at = collapsed.indexOf(clause).takeIf { it >= 0 } ?: return null
+        return index[at]..index[at + clause.length - 1]
+    }
+
+    private fun showMark(shift: Int) {
+        val pad = (3 * dp).toInt()
+        val top = bars.top
         val limit = screen.bounds.height() - peekPx
-        r.inset(-pad, -pad)
-        r.bottom = min(r.bottom, limit)
-        if (r.height() <= pad * 2) {
+        val lines = markLines.map { Rect(it).apply { offset(0, shift); inset(-pad, -pad / 2) } }
+            .filter { it.bottom > top && it.top < limit }
+            .map { Rect(it.left, maxOf(it.top, top), it.right, minOf(it.bottom, limit)) }
+        if (lines.isEmpty()) {
             highlight?.remove()
             highlight = null
             return
         }
+        val area = Rect(lines.first()).apply { lines.forEach(::union) }
+        markShape.value = lines.map { Rect(it).apply { offset(-area.left, -area.top) } }
         val window = highlight
         if (window == null) {
-            val params = overlayParams(r.width(), r.height(), Gravity.TOP or Gravity.LEFT, touchable = false)
-            params.x = r.left
-            params.y = r.top
-            highlight = OverlayWindow(this, params) { Highlight() }
+            val params = overlayParams(area.width(), area.height(), Gravity.TOP or Gravity.LEFT, touchable = false)
+            params.x = area.left
+            params.y = area.top
+            highlight = OverlayWindow(this, params) { Highlight(markShape.value) }
         } else {
-            window.params.x = r.left
-            window.params.y = r.top
-            window.params.width = r.width()
-            window.params.height = r.height()
+            window.params.x = area.left
+            window.params.y = area.top
+            window.params.width = area.width()
+            window.params.height = area.height()
             window.update()
         }
     }
 
     private fun followMark() {
-        if (marked != null) showMark()
+        val node = marked ?: return
+        node.refresh()
+        showMark(topOf(node) - markTop)
     }
 
     private fun clearMark() {
