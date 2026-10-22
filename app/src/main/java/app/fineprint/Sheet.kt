@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
 
 enum class SheetMode { Hidden, Full, Peek }
 
-class SheetScope(val connection: NestedScrollConnection, val peeking: Float)
+class SheetScope(val connection: NestedScrollConnection)
 
 @Composable
 fun Sheet(
@@ -170,7 +170,7 @@ fun Sheet(
                 Box(Modifier.size(36.dp, 4.dp).background(palette.rule, CircleShape))
             }
             Box(Modifier.weight(1f)) {
-                SheetScope(connection, peeking).content()
+                SheetScope(connection).content()
                 if (peeking > 0f) {
                     Box(
                         Modifier

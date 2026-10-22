@@ -5,6 +5,13 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
+import android.os.Bundle
+import android.view.View
+import android.view.accessibility.AccessibilityWindowInfo
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalView
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -24,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlin.coroutines.resume
@@ -31,10 +39,9 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import androidx.compose.ui.platform.AndroidUiDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -122,14 +129,14 @@ class FineprintService : AccessibilityService() {
 
     private suspend fun scan() {
         if (sheet != null || !Prefs.auto.value) return
-        val found = withContext(Dispatchers.Default) {
+        val result = withContext(Dispatchers.Default) {
             val root = rootInActiveWindow ?: return@withContext null
             if (root.packageName == packageName) return@withContext Unit
             val clauses = splitClauses(readBlocks(landmark(root, "main") ?: landmark(root, "article") ?: root).joinToString("\n"))
             if (looksLikeTerms(clauses)) Doc(clauses, sourceOf(root), root.windowId, root.packageName) else null
         }
-        if (found == Unit) return
-        val next = found as Doc?
+        if (result == Unit) return
+        val next = result as Doc?
         if (next == null) {
             doc = null
             hidePill()
@@ -151,18 +158,21 @@ class FineprintService : AccessibilityService() {
     }
 
     private fun inlineText(node: AccessibilityNodeInfo): String? {
-        val display = node.extras.getString("AccessibilityNodeInfo.cssDisplay")
-        val inline = display?.startsWith("inline") == true || node.extras.getString("AccessibilityNodeInfo.chromeRole") == "staticText"
+        val role = node.extras.getString("AccessibilityNodeInfo.chromeRole")
+        if (role == "listMarker") return ""
+        val inline = node.extras.getString("AccessibilityNodeInfo.cssDisplay")?.startsWith("inline") == true || role == "staticText"
         if (!inline) return null
-        if (node.childCount == 0) return node.text?.toString().orEmpty()
+        if (node.childCount == 0) return leafText(node)
         return buildString {
             for (i in 0 until node.childCount) append(node.getChild(i)?.let(::inlineText) ?: return null)
         }
     }
 
+    private fun leafText(node: AccessibilityNodeInfo) = node.text?.toString().orEmpty()
+
     private fun readBlocks(node: AccessibilityNodeInfo, out: MutableList<String> = mutableListOf()): List<String> {
         if (node.childCount == 0) {
-            node.text?.takeIf { it.isNotBlank() }?.let { out += it.toString() }
+            leafText(node).takeIf { it.isNotBlank() }?.let { out += it }
             return out
         }
         val run = StringBuilder()
@@ -182,7 +192,7 @@ class FineprintService : AccessibilityService() {
     }
 
     private fun ownText(node: AccessibilityNodeInfo): String? {
-        if (node.childCount == 0) return node.text?.toString()
+        if (node.childCount == 0) return leafText(node)
         return buildString {
             for (i in 0 until node.childCount) append(node.getChild(i)?.let(::inlineText) ?: return null)
         }.ifBlank { null }
@@ -205,9 +215,9 @@ class FineprintService : AccessibilityService() {
         pill = OverlayWindow(this, params) {
             val check by Checker.current.collectAsState()
             val current = check?.takeIf { it.key == docKey } ?: return@OverlayWindow
-            var expanded by androidx.compose.runtime.remember(current.key) { mutableStateOf(true) }
-            val view = androidx.compose.ui.platform.LocalView.current
-            androidx.compose.runtime.LaunchedEffect(current.key, current.running) {
+            var expanded by remember(current.key) { mutableStateOf(true) }
+            val view = LocalView.current
+            LaunchedEffect(current.key, current.running) {
                 if (current.running) {
                     expanded = true
                 } else {
@@ -340,7 +350,7 @@ class FineprintService : AccessibilityService() {
 
     private fun openSheet() {
         if (sheet != null) return
-        pill?.view?.visibility = android.view.View.INVISIBLE
+        pill?.view?.visibility = View.INVISIBLE
         selected = null
         mode = SheetMode.Full
         val params = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, Gravity.BOTTOM, focusable = true)
@@ -383,14 +393,12 @@ class FineprintService : AccessibilityService() {
             SheetMode.Full -> {
                 clearMark()
                 params.height = WindowManager.LayoutParams.MATCH_PARENT
-                params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
                 window.update()
             }
             SheetMode.Peek -> scope.launch {
                 delay(320)
                 if (mode != SheetMode.Peek) return@launch
                 params.height = peekPx
-                params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 window.update()
             }
             SheetMode.Hidden -> clearMark()
@@ -402,7 +410,7 @@ class FineprintService : AccessibilityService() {
         sheet = null
         mode = SheetMode.Hidden
         clearMark()
-        pill?.view?.visibility = android.view.View.VISIBLE
+        pill?.view?.visibility = View.VISIBLE
         schedule(200)
     }
 
@@ -434,7 +442,7 @@ class FineprintService : AccessibilityService() {
     private fun targetRoot(): AccessibilityNodeInfo? {
         val id = doc?.windowId
         return windows.firstOrNull { it.id == id }?.root
-            ?: windows.firstOrNull { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION && it.root?.packageName != packageName }?.root
+            ?: windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root?.packageName != packageName }?.root
     }
 
     private suspend fun reveal(clause: String): Boolean {
@@ -528,8 +536,8 @@ class FineprintService : AccessibilityService() {
         val leaves = leavesOf(node)
         val raw = leaves.joinToString("") { it.text?.toString().orEmpty() }
         val range = rawRange(raw, clause) ?: return emptyList()
-        repeat(2) { attempt ->
-            val boxes = mutableListOf<android.graphics.RectF>()
+        repeat(2) {
+            val boxes = mutableListOf<RectF>()
             var coarse = false
             var offset = 0
             for (leaf in leaves) {
@@ -537,15 +545,15 @@ class FineprintService : AccessibilityService() {
                 val start = maxOf(range.first, offset)
                 val end = minOf(range.last + 1, offset + length)
                 if (start < end) {
-                    val args = android.os.Bundle().apply {
+                    val args = Bundle().apply {
                         putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, start - offset)
                         putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, end - start)
                     }
                     leaf.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
-                    val found = leaf.extras.getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, android.graphics.RectF::class.java)
+                    val located = leaf.extras.getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, RectF::class.java)
                         ?.filterNotNull()?.filter { it.width() > 0 && it.height() > 0 }.orEmpty()
-                    if (found.size > 1 && found.distinct().size == 1) coarse = true
-                    boxes += found
+                    if (located.size > 1 && located.distinct().size == 1) coarse = true
+                    boxes += located
                 }
                 offset += length
             }
@@ -555,12 +563,12 @@ class FineprintService : AccessibilityService() {
         return emptyList()
     }
 
-    private fun merge(boxes: List<android.graphics.RectF>): List<Rect> {
+    private fun merge(boxes: List<RectF>): List<Rect> {
         val typical = boxes.map { it.height() }.sorted().getOrElse(boxes.size / 2) { 0f }
-        val lines = mutableListOf<android.graphics.RectF>()
+        val lines = mutableListOf<RectF>()
         for (box in boxes.filter { it.height() <= typical * 1.6f }.sortedWith(compareBy({ it.centerY() }, { it.left }))) {
             val line = lines.lastOrNull()?.takeIf { abs(it.centerY() - box.centerY()) < box.height() / 2 }
-            if (line != null) line.union(box) else lines += android.graphics.RectF(box)
+            if (line != null) line.union(box) else lines += RectF(box)
         }
         return lines.map { Rect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt()) }
     }

@@ -1,6 +1,7 @@
 package app.fineprint
 
 import android.content.Context
+import android.graphics.Rect
 import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.WindowManager
@@ -36,8 +37,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -156,7 +162,7 @@ fun Pill(check: Check, expanded: Boolean, leaving: Boolean, modifier: Modifier =
                 Canvas(Modifier.fillMaxSize().padding(2.dp)) {
                     val stroke = 2.5.dp.toPx()
                     val inset = stroke / 2
-                    val box = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                    val box = Size(size.width - stroke, size.height - stroke)
                     drawArc(track, 0f, 360f, false, Offset(inset, inset), box, style = Stroke(stroke))
                     drawArc(arc, -90f, 360f * progress, false, Offset(inset, inset), box, style = Stroke(stroke, cap = StrokeCap.Round))
                 }
@@ -203,7 +209,7 @@ fun DismissTarget(visible: Boolean, hot: Boolean) {
 }
 
 @Composable
-fun Highlight(lines: List<android.graphics.Rect>) {
+fun Highlight(lines: List<Rect>) {
     val palette = LocalPalette.current
     val enter = remember { Animatable(0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, Motion.large()) }
@@ -211,15 +217,15 @@ fun Highlight(lines: List<android.graphics.Rect>) {
     Canvas(
         Modifier.fillMaxSize().graphicsLayer {
             alpha = enter.value * 0.36f
-            compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+            compositingStrategy = CompositingStrategy.Offscreen
         },
     ) {
-        val radius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+        val radius = CornerRadius(3.dp.toPx())
         lines.forEach { line ->
             drawRoundRect(
                 color,
                 Offset(line.left.toFloat(), line.top.toFloat()),
-                androidx.compose.ui.geometry.Size(line.width().toFloat(), line.height().toFloat()),
+                Size(line.width().toFloat(), line.height().toFloat()),
                 radius,
             )
         }
@@ -232,8 +238,8 @@ enum class Glyph { Close, Previous, Next, Check }
 fun Icon(glyph: Glyph, color: Color, size: Int = 16, modifier: Modifier = Modifier) {
     Canvas(modifier.size(size.dp)) {
         val w = this.size.width
-        val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        val path = androidx.compose.ui.graphics.Path()
+        val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val path = Path()
         when (glyph) {
             Glyph.Close -> {
                 path.moveTo(w * 0.2f, w * 0.2f); path.lineTo(w * 0.8f, w * 0.8f)
