@@ -695,7 +695,7 @@ button { font: inherit; color: inherit; }
   gap: 8px;
 }
 
-.report[data-status="running"] .verdict-detail { min-height: 1lh; }
+.report[data-status="running"] .verdict-detail { min-height: 3lh; }
 .report:not([data-status="running"]) :is(.map-time, [data-action="stop"]) { display: none; }
 
 .outcome:empty { display: none; }
