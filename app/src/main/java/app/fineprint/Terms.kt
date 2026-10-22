@@ -81,6 +81,16 @@ fun parseReply(content: String): Verdict? {
     return Verdict(flags, if (flags.isEmpty()) "" else plain.ifEmpty { flags.first().fallback })
 }
 
+private val legalWords = Regex(
+    "\\b(terms|agree|agreement|liab|arbitrat|indemn|warrant|governing|jurisdiction|terminat|dispute|licen[cs]e|breach|waive|hereby|herein|pursuant|discretion|court|law)",
+    RegexOption.IGNORE_CASE,
+)
+
+fun looksLikeTerms(clauses: List<String>): Boolean {
+    val legal = clauses.count { legalWords.containsMatchIn(it) }
+    return clauses.size >= 12 && legal >= 8 && legal * 3 >= clauses.size
+}
+
 fun gradeOf(flags: Collection<Category>): Grade {
     val distinct = flags.toSet()
     val high = distinct.count { it.severity == Severity.High }
