@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Fineprint</string>
+    <string name="check_with">Check with Fineprint</string>
+    <string name="service_description">Fineprint looks at the text on your screen to spot terms of service, then grades them with a model on this phone. Fineprint has no internet access, so the text never leaves your device.</string>
+</resources>
