@@ -98,7 +98,7 @@ fun summary(check: Check): String {
     val labels = check.findings.flatMap { it.verdict.flags }.distinct()
         .filter { it.severity != Severity.Low }.sortedBy { it.severity }.map { it.label }
     return when {
-        labels.isNotEmpty() -> listSentence(labels) + "."
+        labels.isNotEmpty() -> listSentence(labels.mapIndexed { i, label -> if (i == 0) label else label.replaceFirstChar(Char::lowercase) }) + "."
         check.running -> "Checking ${check.source} on this phone."
         else -> "No serious or notable terms in ${plural(check.done, "clause")}."
     }
@@ -248,7 +248,12 @@ private fun Meter(check: Check) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Txt("Clause ${count.format(check.done)} of ${count.format(check.total)}", Type.label.copy(fontFeatureSettings = Type.tabular, fontSize = 12.5.sp), Modifier.weight(1f))
-            Txt(duration(elapsed(check)), TextStyle(fontSize = 12.5.sp, fontFeatureSettings = Type.tabular), color = palette.muted)
+            val detail = listOfNotNull(
+                plural(check.invalid, "invalid output").takeIf { check.invalid > 0 },
+                check.tokensPerSecond?.let { "${it.toInt()} tok/s" },
+                duration(elapsed(check)),
+            ).joinToString("  ")
+            Txt(detail, TextStyle(fontSize = 12.5.sp, fontFeatureSettings = Type.tabular), color = palette.muted)
         }
         Box(Modifier.padding(top = 10.dp).fillMaxWidth().height(3.dp).background(palette.sunken, CircleShape)) {
             Box(Modifier.fillMaxWidth(progress).fillMaxHeight().background(palette.accent, CircleShape))
@@ -362,7 +367,7 @@ fun ResultList(
                 if (check.running) {
                     Box(Modifier.padding(top = 18.dp)) { Meter(check) }
                 }
-                if (check.done > 0) {
+                if (check.done > 0 && !check.running) {
                     Box(Modifier.padding(top = 18.dp)) { Stats(check) }
                 }
                 if (previous != null && !check.running) {
