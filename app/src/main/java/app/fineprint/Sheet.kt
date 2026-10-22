@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -152,6 +153,7 @@ fun Sheet(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .wrapContentHeight(Alignment.Bottom, unbounded = true)
                 .height(height)
                 .offset { IntOffset(0, offset.roundToInt()) }
                 .shadow(16.dp, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp), ambientColor = Color.Black, spotColor = Color.Black)

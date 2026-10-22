@@ -56,7 +56,7 @@ class FineprintService : AccessibilityService() {
     private var highlight: OverlayWindow? = null
     private var marked: AccessibilityNodeInfo? = null
 
-    private var leaving by mutableStateOf(false)
+    private var leaving = mutableStateOf(false)
     private var hot by mutableStateOf(false)
     private var mode by mutableStateOf(SheetMode.Hidden)
     private var selected by mutableStateOf<Int?>(null)
@@ -65,7 +65,7 @@ class FineprintService : AccessibilityService() {
     private val dp get() = resources.displayMetrics.density
     private val screen get() = getSystemService(WindowManager::class.java).currentWindowMetrics
     private val bars get() = screen.windowInsets.getInsets(WindowInsets.Type.systemBars())
-    private val peekPx get() = (150 * dp).toInt() + bars.bottom
+    private val peekPx get() = (136 * dp).toInt() + bars.bottom
 
     override fun onServiceConnected() {
         scope.launch { Prefs.auto.collect { if (!it) hidePill() else schedule(0) } }
@@ -79,7 +79,7 @@ class FineprintService : AccessibilityService() {
                 followMark()
                 schedule(900)
             }
-            else -> schedule(900)
+            else -> if (doc?.windowId != event.windowId || event.source?.viewIdResourceName?.endsWith("url_bar") == true) schedule(900)
         }
     }
 
@@ -107,7 +107,7 @@ class FineprintService : AccessibilityService() {
         val found = withContext(Dispatchers.Default) {
             val root = rootInActiveWindow ?: return@withContext null
             if (root.packageName == packageName) return@withContext Unit
-            val clauses = splitClauses(readBlocks(root).joinToString("\n"))
+            val clauses = splitClauses(readBlocks(landmark(root, "main") ?: landmark(root, "article") ?: root).joinToString("\n"))
             if (looksLikeTerms(clauses)) Doc(clauses, sourceOf(root), root.windowId) else null
         }
         if (found == Unit) return
@@ -119,9 +119,14 @@ class FineprintService : AccessibilityService() {
         }
         doc = next
         val check = Checker.check(next.clauses, next.source)
-        if (check.key != docKey) leaving = false
         docKey = check.key
         if (dismissed != check.key) showPill()
+    }
+
+    private fun landmark(node: AccessibilityNodeInfo, role: String): AccessibilityNodeInfo? {
+        if (node.extras.getString("AccessibilityNodeInfo.chromeRole") == role) return node
+        for (i in 0 until node.childCount) node.getChild(i)?.let { landmark(it, role) }?.let { return it }
+        return null
     }
 
     private fun inlineText(node: AccessibilityNodeInfo): String? {
@@ -174,6 +179,7 @@ class FineprintService : AccessibilityService() {
         if (pill != null) return
         val params = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
         params.y = (screen.bounds.height() * 0.36f).toInt()
+        val gone = mutableStateOf(false).also { leaving = it }
         pill = OverlayWindow(this, params) {
             val check by Checker.current.collectAsState()
             val current = check?.takeIf { it.key == docKey } ?: return@OverlayWindow
@@ -188,14 +194,14 @@ class FineprintService : AccessibilityService() {
                     expanded = false
                 }
             }
-            Pill(current, expanded, leaving, Modifier.pointerInteropFilter { onPillTouch(it) })
+            Pill(current, expanded, gone.value, Modifier.pointerInteropFilter { onPillTouch(it) })
         }
     }
 
     private fun hidePill() {
         val window = pill ?: return
         pill = null
-        leaving = true
+        leaving.value = true
         scope.launch {
             delay(220)
             window.remove()
@@ -428,7 +434,6 @@ class FineprintService : AccessibilityService() {
             val r = Rect().also(node::getBoundsInScreen)
             val room = limit - viewport.top
             val wanted = viewport.top + ((room - min(r.height(), room)) / 3).coerceAtLeast((16 * dp).toInt())
-            if (r.top >= viewport.top && r.bottom <= limit) return@repeat
             if (abs(r.top - wanted) < 24 * dp) return@repeat
             scrollBy((r.top - wanted).toFloat(), viewport, limit)
             delay(200)

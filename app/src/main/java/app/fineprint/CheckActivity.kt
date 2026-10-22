@@ -41,11 +41,11 @@ class CheckActivity : ComponentActivity() {
 }
 
 @Composable
-fun ResultSheet(clauses: List<String>, source: String, onHidden: () -> Unit, addModel: () -> Unit) {
+fun ResultSheet(clauses: List<String>, source: String, onHidden: () -> Unit, model: Model = Prefs.model.value, addModel: () -> Unit) {
     var mode by remember { mutableStateOf(SheetMode.Full) }
     var selected by remember { mutableStateOf<Int?>(null) }
     val current by Checker.current.collectAsState()
-    remember(clauses) { if (clauses.isNotEmpty()) Checker.check(clauses, source) }
+    remember(clauses) { if (clauses.isNotEmpty()) Checker.check(clauses, source, model) }
     BackHandler(mode != SheetMode.Hidden) { mode = SheetMode.Hidden }
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()

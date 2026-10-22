@@ -111,7 +111,8 @@ private fun Home() {
     var copying by remember { mutableStateOf<Pair<Model, Float>?>(null) }
     var importFor by remember { mutableStateOf(Model.Base) }
     var importError by remember { mutableStateOf<String?>(null) }
-    var showing by remember { mutableStateOf<Pair<List<String>, String>?>(null) }
+    var showing by remember { mutableStateOf<Triple<List<String>, String, Model>?>(null) }
+    val history by Checker.history.collectAsState()
     var pasted by remember { mutableStateOf("") }
     var legend by remember { mutableStateOf(Grade.C) }
 
@@ -211,7 +212,7 @@ private fun Home() {
                     if (i > 0) Rule()
                     val clauses = remember { splitClauses(context.assets.open(sample.file).bufferedReader().readText()) }
                     Row(
-                        Modifier.fillMaxWidth().pressable({ showing = clauses to sample.title }, 0.985f).padding(horizontal = 14.dp, vertical = 13.dp),
+                        Modifier.fillMaxWidth().pressable({ showing = Triple(clauses, sample.title, model) }, 0.985f).padding(horizontal = 14.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -243,11 +244,39 @@ private fun Home() {
             }
             Button(
                 if (pastedClauses.isEmpty()) "Check" else "Check ${plural(pastedClauses.size, "clause")}",
-                { showing = pastedClauses to "Pasted text" },
+                { showing = Triple(pastedClauses, "Pasted text", model) },
                 Modifier.padding(top = 10.dp).fillMaxWidth(),
                 primary = true,
                 enabled = pastedClauses.isNotEmpty(),
             )
+
+            if (history.isNotEmpty()) {
+                Section("Recent checks")
+                Card {
+                    history.take(4).forEachIndexed { i, check ->
+                        if (i > 0) Rule()
+                        Row(
+                            Modifier.fillMaxWidth().pressable({ showing = Triple(check.clauses, check.source, check.model) }, 0.985f).padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(Modifier.size(30.dp).background(check.grade.color, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                                Txt(check.grade.name, TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold), color = check.grade.onColor)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Txt(check.source, Type.plain, maxLines = 1)
+                                Txt(
+                                    "${check.model.label}, ${if (check.running) "${check.done} of ${plural(check.total, "clause")}" else plural(check.total, "clause")}, ${duration(check.millis)}",
+                                    Type.small.copy(fontFeatureSettings = Type.tabular),
+                                    color = palette.muted,
+                                    maxLines = 1,
+                                )
+                            }
+                            Icon(Glyph.Next, palette.muted, 16)
+                        }
+                    }
+                }
+            }
 
             Section("Settings")
             Card {
@@ -315,8 +344,8 @@ private fun Home() {
             Spacer(Modifier.height(48.dp))
         }
 
-        showing?.let { (clauses, source) ->
-            ResultSheet(clauses, source, onHidden = { showing = null }) {
+        showing?.let { (clauses, source, checkModel) ->
+            ResultSheet(clauses, source, onHidden = { showing = null }, model = checkModel) {
                 showing = null
                 import(Model.entries.first { !Checker.installed(it) })
             }

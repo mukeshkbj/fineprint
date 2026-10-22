@@ -253,13 +253,12 @@ fun PeekBar(
     val palette = LocalPalette.current
     Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                finding.verdict.flags.take(2).forEach { flag ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Dot(palette.severity(flag.severity), 6)
-                        Txt(flag.label, Type.label, maxLines = 1)
-                    }
-                }
+            val flag = finding.verdict.flags.first()
+            val more = finding.verdict.flags.size - 1
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Dot(palette.severity(flag.severity), 6)
+                Txt(flag.label, Type.label, maxLines = 1)
+                if (more > 0) Txt("+$more", Type.label.copy(fontWeight = FontWeight.Medium, fontFeatureSettings = Type.tabular), color = palette.muted)
             }
             Txt("${position + 1} of $total", TextStyle(fontSize = 12.5.sp, fontFeatureSettings = Type.tabular), Modifier.padding(horizontal = 10.dp), palette.muted)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
