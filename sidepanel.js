@@ -19,6 +19,8 @@ let model = (await chrome.storage.local.get("model")).model ?? "base";
 let tabId = null;
 let view = null;
 let current = { key: null, root: null };
+let editing = false;
+const drafts = { before: "", after: "" };
 
 const send = (message) => chrome.runtime.sendMessage(message);
 const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
@@ -50,6 +52,7 @@ function render() {
   server.dataset.state = view?.server ?? "unknown";
   document.getElementById("server-text").textContent = `${MODELS[model].label} model on port ${MODELS[model].port} · ${SERVER_TEXT[view?.server] ?? "Checking"}`;
   if (!view) return;
+  if (editing) return renderDiffForm();
   if (!view.page.readable) return renderUnreadable();
   const job = view.job;
   if (!job || job.status === "empty") return renderIntro(job);
@@ -58,10 +61,10 @@ function render() {
 
 function renderUnreadable() {
   const root = show(`unreadable|${view.granted}`, "unreadable");
-  root.querySelector(".title").textContent = view.granted ? "Fineprint can’t read this page" : "Click the Fineprint icon to read this tab";
+  root.querySelector(".title").textContent = view.granted ? "Fineprint can’t read this page" : "Click the Fineprint icon to read this page";
   root.querySelector(".lede").textContent = view.granted
     ? "Chrome pages, the Web Store, and the PDF viewer stay off limits. Open the terms as a web page and check again."
-    : "Chrome lets Fineprint read a page after you click its icon on that page. Chrome pages and the Web Store stay off limits.";
+    : "Chrome lets Fineprint read a page after you click its icon on that page, and again after the tab moves to a new page.";
   renderSites(root);
 }
 
@@ -89,7 +92,22 @@ function renderIntro(job) {
     view.server === "loading" ? "The model is still loading. This takes a few seconds."
     : job?.status === "empty" ? `No terms found on ${host}. Select the terms and check again.`
     : selection ? `${count.format(selection)} characters selected on ${host}.`
-    : `Reads ${host}. Select text first to check only part of it.`;
+    : `Reads ${host}. Select text to check only that part.`;
+}
+
+function renderDiffForm(hint = "") {
+  const root = show(`diff|${model}`, "diff");
+  const fields = root.querySelectorAll("textarea");
+  if (!root.dataset.ready) {
+    root.dataset.ready = "";
+    for (const field of fields) {
+      field.value = drafts[field.name];
+      field.addEventListener("input", () => (drafts[field.name] = field.value));
+    }
+  }
+  root.querySelector('[data-action="use-page"]').hidden = !view.page.readable;
+  root.querySelector('[data-action="diff"]').disabled = view.server !== "ready";
+  root.querySelector(".hint").textContent = hint || (view.server === "ready" ? "Both versions are checked on this computer." : "Start the local model to compare.");
 }
 
 function offlineNotice(title, text) {
@@ -105,25 +123,33 @@ function renderReport(job) {
   const running = job.status === "running";
   root.dataset.status = job.status;
 
-  const grade = gradeOf(job.findings);
+  const diff = job.source === "diff";
+  const side = (finding) => job.sides?.[finding.index] ?? "new";
+  const findings = diff ? job.findings.filter((finding) => side(finding) !== "old") : job.findings;
+  const grade = gradeOf(findings);
   const strip = root.querySelector(".strip");
   strip.dataset.grade = job.done ? grade : "";
   strip.style.setProperty("--index", "ABCDE".indexOf(grade));
   strip.setAttribute("aria-label", job.done ? `Grade ${grade}` : "No grade yet");
   for (const cell of strip.querySelectorAll(".cell")) cell.toggleAttribute("data-active", job.done > 0 && cell.dataset.grade === grade);
 
-  const distinct = (severity) => [...new Set(job.findings.flatMap((finding) => finding.flags))].filter((flag) => CATEGORIES[flag].severity === severity);
+  const previous = job.findings.filter((finding) => side(finding) !== "new");
+  const known = new Set(diff ? previous.flatMap((finding) => finding.flags) : []);
+  const flags = [...new Set(findings.flatMap((finding) => finding.flags))].filter((flag) => !known.has(flag));
+  const distinct = (severity) => flags.filter((flag) => CATEGORIES[flag].severity === severity);
   const high = distinct("high");
   const medium = distinct("medium");
-  const headline = high.length ? plural(high.length, "serious term")
-    : medium.length ? `${plural(medium.length, "term")} worth knowing`
-    : "nothing unfair found";
+  const fresh = diff ? "new " : "";
+  const headline = high.length ? plural(high.length, `${fresh}serious term`)
+    : medium.length ? `${plural(medium.length, `${fresh}term`)} worth knowing`
+    : diff ? "nothing new to worry about" : "nothing unfair found";
   const verdict = !job.done ? "Reading the terms" : running ? `So far, ${headline}` : headline[0].toUpperCase() + headline.slice(1);
   setText(root.querySelector(".verdict"), verdict);
-  const labels = [...high, ...medium].map((flag) => CATEGORIES[flag].label);
+  const labels = list.format([...high, ...medium].map((flag) => CATEGORIES[flag].label));
   setText(root.querySelector(".verdict-detail"),
-    labels.length ? `${list.format(labels)}.`
-    : running ? `Checking ${job.source === "selection" ? "your selection" : job.host} on this computer.`
+    diff && job.done ? `Grade ${gradeOf(previous)} before, ${grade} now.${labels ? ` New: ${labels}.` : ""}`
+    : labels ? `${labels}.`
+    : running ? `Checking ${diff ? "both versions" : job.source === "selection" ? "your selection" : job.host} on this computer.`
     : `No serious or notable terms in ${plural(job.done, "clause")}.`);
 
   root.querySelector(".meter").hidden = !running;
@@ -156,7 +182,7 @@ function renderReport(job) {
   }
 
   const compare = root.querySelector(".compare");
-  compare.hidden = !(job.status === "done" && view.other);
+  compare.hidden = !(job.status === "done" && view.other) || diff;
   if (!compare.hidden) {
     for (const report of [job, view.other]) {
       const cell = (name, value) => (compare.querySelector(`[data-${report.model}="${name}"]`).textContent = value);
@@ -168,14 +194,15 @@ function renderReport(job) {
     compare.dataset.current = model;
   }
 
-  renderFindings(root, job);
-  root.querySelector(".report-actions").hidden = running;
-  const again = root.querySelector('.report-actions [data-action="check"]');
-  again.disabled = view.server !== "ready";
+  renderFindings(root, diff ? job.findings.filter((finding) => side(finding) === "new") : job.findings, job);
+  const actions = root.querySelector(".report-actions");
+  actions.hidden = running;
+  for (const button of actions.querySelectorAll("[data-for]")) button.hidden = (button.dataset.for === "diff") !== diff;
+  actions.querySelector('[data-action="check"]').disabled = view.server !== "ready";
 }
 
-function renderFindings(root, job) {
-  const fresh = job.findings.filter((finding) => !current.cards.has(finding.index));
+function renderFindings(root, findings, job) {
+  const fresh = findings.filter((finding) => !current.cards.has(finding.index));
   if (!fresh.length) return;
   const initial = current.cards.size === 0;
   flip(root.querySelector(".findings"), () => {
@@ -224,6 +251,7 @@ async function select(card, finding, job) {
     card.querySelector(".card-hit").setAttribute("aria-expanded", "true");
   });
   current.selected = card;
+  if (job.source === "diff") return;
   const { found } = await send({ type: "mark", tabId: job.tabId, url: job.url, text: finding.text });
   card.classList.toggle("missing", !found);
 }
@@ -292,9 +320,6 @@ function stat(stats, name, value) {
 }
 
 async function refresh() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  tabId = tab.id;
   view = await send({ type: "view", tabId, model });
   render();
 }
@@ -339,6 +364,27 @@ screen.addEventListener("click", async (event) => {
     render();
   }
   if (action === "stop") send({ type: "stop", tabId });
+  if (action === "diff-form") {
+    editing = true;
+    render();
+  }
+  if (action === "home") {
+    editing = false;
+    await send({ type: "dismiss", tabId });
+    refresh();
+  }
+  if (action === "use-page") {
+    const field = screen.querySelector('textarea[name="after"]');
+    field.value = drafts.after = await send({ type: "pageText", tabId });
+  }
+  if (action === "diff") {
+    if (!drafts.before.trim() || !drafts.after.trim()) return renderDiffForm("Paste both versions first.");
+    const job = await send({ type: "diff", tabId, model, ...drafts });
+    if (job.status === "empty") return renderDiffForm("Fineprint found no clauses to compare. Paste longer passages.");
+    editing = false;
+    view = { ...view, job };
+    render();
+  }
   if (action === "refresh") refresh();
   if (action === "sites") {
     const origins = { origins: ["<all_urls>"] };
@@ -358,6 +404,7 @@ screen.addEventListener("click", async (event) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "activated" && message.tabId === tabId) return refresh();
   if (message.type !== "job" || message.job.tabId !== tabId) return;
   if (message.job.model !== model) return;
   const finished = view?.job?.status === "running" && message.job.status !== "running";
@@ -366,8 +413,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (finished) refresh();
 });
 
-const { id: windowId } = await chrome.windows.getCurrent();
-chrome.tabs.onActivated.addListener((info) => info.windowId === windowId && refresh());
+[{ id: tabId }] = await chrome.tabs.query({ active: true, currentWindow: true });
 chrome.tabs.onUpdated.addListener((id, change) => id === tabId && change.status === "complete" && refresh());
 document.addEventListener("pointerenter", refreshSoon);
 addEventListener("focus", refreshSoon);

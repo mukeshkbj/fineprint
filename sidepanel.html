@@ -43,7 +43,33 @@
     <div class="check">
       <button type="button" class="button primary" data-action="check"></button>
       <p class="hint"></p>
+      <button type="button" class="link" data-action="diff-form">Compare two versions of the terms</button>
     </div>
+  </template>
+
+  <template id="diff">
+    <section class="intro diff">
+      <button type="button" class="link back" data-action="home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Back
+      </button>
+      <h1 class="title">What changed?</h1>
+      <p class="lede">Paste the old and the new version of the terms. Fineprint shows only what the new version adds.</p>
+      <div class="field">
+        <label for="before">Old version</label>
+        <textarea id="before" name="before" rows="5" spellcheck="false" placeholder="Paste the previous terms"></textarea>
+      </div>
+      <div class="field">
+        <div class="field-head">
+          <label for="after">New version</label>
+          <button type="button" class="link" data-action="use-page">Use this page</button>
+        </div>
+        <textarea id="after" name="after" rows="5" spellcheck="false" placeholder="Paste the updated terms"></textarea>
+      </div>
+      <div class="check">
+        <button type="button" class="button primary" data-action="diff">Show what changed</button>
+        <p class="hint"></p>
+      </div>
+    </section>
   </template>
 
   <template id="offline">
@@ -140,7 +166,9 @@
       </div>
 
       <div class="report-actions">
-        <button type="button" class="button" data-action="check">Check again</button>
+        <button type="button" class="button" data-action="check" data-for="page">Check again</button>
+        <button type="button" class="button" data-action="diff-form" data-for="diff">Edit versions</button>
+        <button type="button" class="button" data-action="home" data-for="diff">Done</button>
       </div>
     </section>
   </template>

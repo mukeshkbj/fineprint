@@ -2,11 +2,18 @@ import { CATEGORIES, MODELS, SYSTEM_PROMPT, gradeOf, htmlToText, normalize, pars
 import { markClause, readPage } from "./page.js";
 
 const PARALLEL = 4;
+const REQUEST_TIMEOUT = 20_000;
 const ALL_SITES = { origins: ["<all_urls>"] };
 const jobs = new Map();
 const links = new Map();
 
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true });
+  chrome.sidePanel.open({ tabId: tab.id });
+  chrome.runtime.sendMessage({ type: "activated", tabId: tab.id }).catch(() => {});
+});
 
 const endpoint = (model, path) => `http://127.0.0.1:${MODELS[model].port}${path}`;
 const reportKey = (model, url) => `report|${model}|${url.split("#")[0]}`;
@@ -50,7 +57,7 @@ async function classify(model, clause, signal) {
   const response = await fetch(endpoint(model, "/v1/chat/completions"), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    signal,
+    signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT)]),
     body: JSON.stringify({
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -91,12 +98,12 @@ async function run(job) {
     job.status = "done";
     job.elapsed = Date.now() - startedAt;
     job.findings.sort((a, b) => a.index - b.index);
-    if (job.source !== "selection") await chrome.storage.local.set({ [reportKey(job.model, job.url)]: snapshot(job) });
+    if (job.source === "page" || job.source === "link") await chrome.storage.local.set({ [reportKey(job.model, job.url)]: snapshot(job) });
   } catch (error) {
     if (job.status !== "running") return;
     job.controller.abort();
     job.elapsed = Date.now() - startedAt;
-    job.status = error instanceof TypeError ? "offline" : "failed";
+    job.status = error instanceof TypeError || error.name === "TimeoutError" ? "offline" : "failed";
     job.error = error.message;
   }
   broadcast(job);
@@ -156,7 +163,7 @@ chrome.runtime.onInstalled.addListener(syncConsentScript);
 
 async function lastReport(model, tabId, url) {
   const job = jobs.get(tabId);
-  if (job?.model === model && job.url === url) return snapshot(job);
+  if (job?.model === model && (job.url === url || job.source === "diff")) return snapshot(job);
   const key = reportKey(model, url);
   return (await chrome.storage.local.get(key))[key] ?? null;
 }
@@ -186,6 +193,31 @@ const handlers = {
     broadcast(job);
     if (job.status === "running") run(job);
     return snapshot(job);
+  },
+
+  async diff({ tabId, model, before, after }) {
+    await handlers.stop({ tabId });
+    const old = new Set(splitClauses(before).map(normalize));
+    const clauses = new Map();
+    for (const clause of splitClauses(before)) clauses.set(normalize(clause), { clause, side: "old" });
+    for (const clause of splitClauses(after)) clauses.set(normalize(clause), { clause, side: old.has(normalize(clause)) ? "both" : "new" });
+    const entries = [...clauses.values()];
+    const job = createJob({ tabId, model, url: "about:diff", source: "diff", clauses: entries.map((entry) => entry.clause) });
+    job.sides = entries.map((entry) => entry.side);
+    jobs.set(tabId, job);
+    broadcast(job);
+    if (job.status === "running") run(job);
+    return snapshot(job);
+  },
+
+  async dismiss({ tabId }) {
+    if (jobs.get(tabId)?.status !== "running") jobs.delete(tabId);
+    return null;
+  },
+
+  async pageText({ tabId }) {
+    const page = await pageOf(tabId);
+    return page.readable ? page.selection || page.text : "";
   },
 
   async stop({ tabId }) {

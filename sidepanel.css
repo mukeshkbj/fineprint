@@ -11,6 +11,7 @@
   --accent: #047857;
   --accent-hover: #065f46;
   --focus: #059669;
+  --link: #047857;
   --warn: #b45309;
   --mark: rgb(245 196 0);
   --grade-a: #1e8a4c;
@@ -38,6 +39,7 @@
     --hover: oklch(1 0 0 / 0.05);
     --active: oklch(1 0 0 / 0.085);
     --warn: #f59e0b;
+    --link: #34d399;
     --mark: rgb(230 186 20);
     --raised: 0 0 0 1px rgb(255 255 255 / 0.08), 0 2px 8px rgb(0 0 0 / 0.35);
   }
@@ -302,6 +304,80 @@ button { font: inherit; color: inherit; }
   display: grid;
   gap: 10px;
 }
+
+.link {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-underline-offset: 3px;
+}
+
+.link svg {
+  width: 16px;
+  height: 16px;
+  margin-inline-start: -4px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .link:hover { text-decoration: underline; }
+}
+
+.check .link { justify-self: center; margin-top: 4px; }
+
+.diff .back { margin-bottom: 6px; color: var(--muted); }
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.field label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.field textarea {
+  width: 100%;
+  min-height: 112px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule);
+  color: var(--ink);
+  font: 13px/1.55 var(--serif);
+  resize: vertical;
+  transition: box-shadow 80ms var(--ease);
+}
+
+.field textarea::placeholder { color: var(--muted); font-family: var(--sans); }
+
+.field textarea:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--focus), 0 0 0 3px color-mix(in oklab, var(--focus) 22%, transparent);
+}
+
+.diff .check { margin-top: 10px; }
 
 .hint {
   margin: 0;
@@ -768,7 +844,10 @@ button { font: inherit; color: inherit; }
 
 .card.missing .card-missing { display: block; }
 
-.report-actions { display: flex; }
+.report-actions {
+  display: flex;
+  gap: 8px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   #screen > *,
