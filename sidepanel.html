@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fineprint</title>
+  <link rel="stylesheet" href="sidepanel.css">
+  <script type="module" src="sidepanel.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <img src="icons/icon.svg" alt="" width="20" height="20">
+      <span>Fineprint</span>
+    </div>
+    <div class="segmented" role="radiogroup" aria-label="Model">
+      <span class="segmented-thumb" aria-hidden="true"></span>
+      <button type="button" role="radio" data-model="base" aria-checked="true"><span class="weight" data-label="Base">Base</span></button>
+      <button type="button" role="radio" data-model="tuned" aria-checked="false"><span class="weight" data-label="Fine-tuned">Fine-tuned</span></button>
+    </div>
+    <p class="server" id="server" aria-live="polite"><span class="server-dot" aria-hidden="true"></span><span id="server-text">Connecting to the local model</span></p>
+  </header>
+
+  <main id="screen"></main>
+
+  <template id="intro">
+    <section class="intro">
+      <div class="strip strip-idle" aria-hidden="true">
+        <span class="cell" data-grade="A">A</span><span class="cell" data-grade="B">B</span><span class="cell" data-grade="C">C</span><span class="cell" data-grade="D">D</span><span class="cell" data-grade="E">E</span>
+      </div>
+      <h1 class="title">What are you agreeing to?</h1>
+      <p class="lede">Fineprint reads the terms on this page with a model that runs on your computer, then grades them from A to E. Nothing leaves your device.</p>
+      <div class="intro-action"></div>
+      <section class="legend">
+        <h2 class="legend-title">What Fineprint looks for</h2>
+        <dl class="legend-list"></dl>
+        <p class="legend-note">A means none of these. B means only terms worth knowing. C, D and E mean one, two, or three or more serious terms.</p>
+      </section>
+    </section>
+  </template>
+
+  <template id="check">
+    <div class="check">
+      <button type="button" class="button primary" data-action="check"></button>
+      <p class="hint"></p>
+    </div>
+  </template>
+
+  <template id="offline">
+    <div class="notice">
+      <h2 class="notice-title">Start the local model</h2>
+      <p class="notice-text">Run this in Terminal. Fineprint connects as soon as the model is ready.</p>
+      <div class="command">
+        <code></code>
+        <button type="button" class="icon-button" data-action="copy" aria-label="Copy command">
+          <span class="swap">
+            <svg class="swap-from" viewBox="0 0 24 24" aria-hidden="true"><rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2h8c1.1 0 2 .9 2 2"/></svg>
+            <svg class="swap-to" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          </span>
+        </button>
+      </div>
+      <span class="visually-hidden" aria-live="polite" data-copied></span>
+    </div>
+  </template>
+
+  <template id="unreadable">
+    <section class="intro">
+      <h1 class="title">Fineprint can’t read this page</h1>
+      <p class="lede">Open a page with terms of service, then click the Fineprint icon in the toolbar. Chrome pages and the Web Store stay off limits.</p>
+      <button type="button" class="button" data-action="refresh">Try again</button>
+    </section>
+  </template>
+
+  <template id="report">
+    <section class="report">
+      <div class="grade">
+        <div class="strip" role="img">
+          <span class="strip-thumb" aria-hidden="true"></span>
+          <span class="cell" data-grade="A">A</span><span class="cell" data-grade="B">B</span><span class="cell" data-grade="C">C</span><span class="cell" data-grade="D">D</span><span class="cell" data-grade="E">E</span>
+        </div>
+        <h1 class="title verdict" aria-live="polite"></h1>
+        <p class="lede verdict-detail"></p>
+      </div>
+
+      <div class="meter">
+        <div class="meter-row">
+          <span class="meter-label"></span>
+          <span class="meter-time"></span>
+          <button type="button" class="button small" data-action="stop">Stop</button>
+        </div>
+        <div class="meter-track"><span class="meter-fill"></span></div>
+      </div>
+
+      <div class="outcome"></div>
+
+      <dl class="stats">
+        <div><dt>Clauses</dt><dd data-stat="clauses"></dd></div>
+        <div><dt>Time</dt><dd data-stat="time"></dd></div>
+        <div><dt>Speed</dt><dd data-stat="speed"></dd></div>
+        <div title="Replies that were not valid JSON. These clauses count as unflagged."><dt>Invalid output</dt><dd data-stat="invalid"></dd></div>
+      </dl>
+
+      <table class="compare">
+        <caption>Base and fine-tuned on this page</caption>
+        <thead><tr><td></td><th scope="col" data-model="base">Base</th><th scope="col" data-model="tuned">Fine-tuned</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Grade</th><td data-base="grade"></td><td data-tuned="grade"></td></tr>
+          <tr><th scope="row">Flagged clauses</th><td data-base="flagged"></td><td data-tuned="flagged"></td></tr>
+          <tr><th scope="row">Invalid output</th><td data-base="invalid"></td><td data-tuned="invalid"></td></tr>
+          <tr><th scope="row">Time</th><td data-base="time"></td><td data-tuned="time"></td></tr>
+        </tbody>
+      </table>
+
+      <div class="findings">
+        <section class="group" data-severity="high" hidden>
+          <span class="hover" aria-hidden="true"></span>
+          <h2 class="group-head"><span class="group-name"></span> <span class="group-count"></span></h2>
+          <ol class="cards"></ol>
+        </section>
+        <section class="group" data-severity="medium" hidden>
+          <span class="hover" aria-hidden="true"></span>
+          <h2 class="group-head"><span class="group-name"></span> <span class="group-count"></span></h2>
+          <ol class="cards"></ol>
+        </section>
+        <section class="group" data-severity="low" hidden>
+          <span class="hover" aria-hidden="true"></span>
+          <h2 class="group-head"><span class="group-name"></span> <span class="group-count"></span></h2>
+          <ol class="cards"></ol>
+        </section>
+      </div>
+
+      <div class="report-actions">
+        <button type="button" class="button" data-action="check">Check again</button>
+      </div>
+    </section>
+  </template>
+
+  <template id="card">
+    <li class="card">
+      <button type="button" class="card-hit" aria-expanded="false">
+        <span class="card-flags"></span>
+        <span class="card-plain"></span>
+        <span class="card-quote"></span>
+        <span class="card-missing">Not found on the page. It may have changed since the check.</span>
+      </button>
+    </li>
+  </template>
+</body>
+</html>
