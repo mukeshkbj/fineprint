@@ -178,20 +178,20 @@ fun Pill(check: Check, expanded: Boolean, leaving: Boolean, modifier: Modifier =
 }
 
 @Composable
-fun DismissTarget(hot: Boolean) {
+fun DismissTarget(visible: Boolean, hot: Boolean) {
     val palette = LocalPalette.current
-    val enter = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { enter.animateTo(1f, Motion.small()) }
+    val shown by animateFloatAsState(if (visible) 1f else 0f, if (visible) Motion.small() else Motion.exit(), label = "dock")
     val scale by animateFloatAsState(if (hot) 1.18f else 1f, Motion.bouncy(), label = "hot")
     val bg by animateColorAsState(if (hot) palette.ink else palette.ink.copy(alpha = 0.78f), Motion.small(), label = "hotBg")
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .graphicsLayer {
-                    alpha = enter.value
-                    translationY = (1f - enter.value) * 16.dp.toPx()
+                    alpha = shown
+                    translationY = (1f - shown) * 16.dp.toPx()
+                    scaleX = scale
+                    scaleY = scale
                 }
-                .scale(scale)
                 .size(56.dp)
                 .shadow(8.dp, CircleShape)
                 .background(bg, CircleShape),
@@ -208,10 +208,9 @@ fun Highlight(lines: List<android.graphics.Rect>) {
     val enter = remember { Animatable(0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, Motion.large()) }
     val color = palette.mark
-    val strength = if (palette.dark) 0.3f else 0.36f
     Canvas(
         Modifier.fillMaxSize().graphicsLayer {
-            alpha = enter.value * strength
+            alpha = enter.value * 0.36f
             compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
         },
     ) {

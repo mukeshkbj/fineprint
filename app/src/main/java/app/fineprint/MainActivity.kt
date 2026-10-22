@@ -150,9 +150,9 @@ private fun Home() {
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
         ) {
             Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -266,7 +266,7 @@ private fun Home() {
                             Column(Modifier.weight(1f)) {
                                 Txt(check.source, Type.plain, maxLines = 1)
                                 Txt(
-                                    "${check.model.label}, ${if (check.running) "${check.done} of ${plural(check.total, "clause")}" else plural(check.total, "clause")}, ${duration(check.millis)}",
+                                    "${check.model.label}, ${plural(check.total, "clause")}, ${duration(check.millis)}",
                                     Type.small.copy(fontFeatureSettings = Type.tabular),
                                     color = palette.muted,
                                     maxLines = 1,
@@ -416,7 +416,7 @@ private fun Toggle(on: Boolean) {
     val track by animateColorAsState(if (on) palette.accent else palette.rule, Motion.small(), label = "track")
     val x by animateDpAsState(if (on) 18.dp else 2.dp, Motion.large(), label = "knob")
     Box(Modifier.size(42.dp, 26.dp).background(track, CircleShape)) {
-        Box(Modifier.offset(x = x, y = 2.dp).size(22.dp).shadow(1.dp, CircleShape).background(palette.surface, CircleShape))
+        Box(Modifier.offset(x = x, y = 2.dp).size(22.dp).shadow(1.dp, CircleShape).background(if (palette.dark) palette.ink else palette.surface, CircleShape))
     }
 }
 

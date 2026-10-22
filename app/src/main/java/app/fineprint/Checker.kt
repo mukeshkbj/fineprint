@@ -101,7 +101,7 @@ object Checker {
     }
 
     private fun publish() {
-        recent.value = checks.values.filter { it.done > 0 }.sortedByDescending { it.at }
+        recent.value = checks.values.filter { it.done == it.total }.sortedByDescending { it.at }
     }
 
     private fun save(check: Check) {

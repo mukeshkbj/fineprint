@@ -224,7 +224,7 @@ private fun Stats(check: Check) {
     val cells = listOf(
         "Clauses" to count.format(check.done),
         "Time" to duration(elapsed(check)),
-        "Speed" to (check.tokensPerSecond?.let { "${it.toInt()} tok/s" } ?: "–"),
+        "Speed" to (check.tokensPerSecond?.let { "${it.toInt()} tok/s" } ?: "Cached"),
         "Invalid output" to count.format(check.invalid),
     )
     Column {

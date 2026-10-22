@@ -32,24 +32,27 @@ import kotlin.math.hypot
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
-private class Doc(val clauses: List<String>, val source: String, val windowId: Int)
+private class Doc(val clauses: List<String>, val source: String, val windowId: Int, val app: CharSequence?)
 
 class FineprintService : AccessibilityService() {
-    private val scope = MainScope()
+    private val scope = CoroutineScope(SupervisorJob() + AndroidUiDispatcher.Main)
     private var scanJob: Job? = null
     private var scanDue = 0L
     private var firstEvent = 0L
     private var retries = 0
     private var doc: Doc? = null
     private var docKey by mutableStateOf<String?>(null)
-    private var dismissed: String? = null
+    private var dismissed: Pair<String, Int>? = null
+    private var detectedAt = 0L
 
     private var pill: OverlayWindow? = null
     private var sheet: OverlayWindow? = null
@@ -76,9 +79,17 @@ class FineprintService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (event.packageName == packageName) return
+        if (event.packageName == packageName) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.className?.endsWith("Activity") == true) {
+                scanJob?.cancel()
+                doc = null
+                hidePill()
+            }
+            return
+        }
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                if (sheet != null && event.packageName != doc?.app && event.packageName != "com.android.systemui") changeMode(SheetMode.Hidden)
                 retries = 0
                 schedule(450)
             }
@@ -86,7 +97,7 @@ class FineprintService : AccessibilityService() {
                 followMark()
                 schedule(900)
             }
-            else -> if (doc?.windowId != event.windowId || event.source?.viewIdResourceName?.endsWith("url_bar") == true) schedule(900)
+            else -> if (doc?.windowId != event.windowId || System.currentTimeMillis() - detectedAt < 10_000 || event.source?.viewIdResourceName?.endsWith("url_bar") == true) schedule(900)
         }
     }
 
@@ -115,21 +126,22 @@ class FineprintService : AccessibilityService() {
             val root = rootInActiveWindow ?: return@withContext null
             if (root.packageName == packageName) return@withContext Unit
             val clauses = splitClauses(readBlocks(landmark(root, "main") ?: landmark(root, "article") ?: root).joinToString("\n"))
-            if (looksLikeTerms(clauses)) Doc(clauses, sourceOf(root), root.windowId) else null
+            if (looksLikeTerms(clauses)) Doc(clauses, sourceOf(root), root.windowId, root.packageName) else null
         }
         if (found == Unit) return
         val next = found as Doc?
         if (next == null) {
             doc = null
             hidePill()
-            if (retries++ < 3) schedule(1500)
+            if (retries++ < 12) schedule(1500)
             return
         }
         retries = 0
+        if (doc?.windowId != next.windowId || doc?.source != next.source) detectedAt = System.currentTimeMillis()
         doc = next
         val check = Checker.check(next.clauses, next.source)
         docKey = check.key
-        if (dismissed != check.key) showPill()
+        if (dismissed != next.source to next.windowId) showPill()
     }
 
     private fun landmark(node: AccessibilityNodeInfo, role: String): AccessibilityNodeInfo? {
@@ -186,6 +198,7 @@ class FineprintService : AccessibilityService() {
     @OptIn(ExperimentalComposeUiApi::class)
     private fun showPill() {
         if (pill != null) return
+        if (target == null) addTarget()
         val params = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
         params.y = (screen.bounds.height() * 0.36f).toInt()
         val gone = mutableStateOf(false).also { leaving = it }
@@ -203,25 +216,26 @@ class FineprintService : AccessibilityService() {
                     expanded = false
                 }
             }
-            Pill(current, expanded, gone.value, Modifier.pointerInteropFilter { onPillTouch(it) })
+            Pill(current, expanded && !dragging, gone.value, Modifier.pointerInteropFilter { onPillTouch(it) })
         }
     }
 
     private fun hidePill() {
         val window = pill ?: return
+        val dock = target
         pill = null
+        target = null
         leaving.value = true
         scope.launch {
             delay(220)
             window.remove()
+            dock?.remove()
         }
     }
 
     private var downX = 0f
     private var downY = 0f
-    private var startLeft = 0
-    private var startTop = 0
-    private var dragging = false
+    private var dragging by mutableStateOf(false)
     private var tracker: VelocityTracker? = null
     private var snapJob: Job? = null
 
@@ -240,8 +254,6 @@ class FineprintService : AccessibilityService() {
                 snapJob?.cancel()
                 downX = event.rawX
                 downY = event.rawY
-                startLeft = leftOf(params, width)
-                startTop = params.y
                 dragging = false
                 tracker = VelocityTracker.obtain().apply { addMovement(event) }
             }
@@ -252,11 +264,10 @@ class FineprintService : AccessibilityService() {
                 if (!dragging && hypot(dx, dy) > ViewConfiguration.get(this).scaledTouchSlop) {
                     dragging = true
                     params.gravity = Gravity.TOP or Gravity.LEFT
-                    showTarget()
                 }
                 if (dragging) {
-                    var left = startLeft + dx
-                    var top = startTop + dy
+                    var left = event.rawX - width / 2f
+                    var top = event.rawY - height / 2f
                     val (cx, cy) = targetCenter
                     val near = hypot(left + width / 2f - cx, top + height / 2f - cy) < 76 * dp
                     if (near != hot) {
@@ -283,7 +294,8 @@ class FineprintService : AccessibilityService() {
                     hot -> dismissPill()
                     dragging -> snap(window, vx, vy)
                 }
-                hideTarget()
+                hot = false
+                dragging = false
             }
         }
         return true
@@ -312,24 +324,17 @@ class FineprintService : AccessibilityService() {
         }
     }
 
-    private fun showTarget() {
-        if (target != null) return
+    private fun addTarget() {
         val size = (132 * dp).toInt()
         val params = overlayParams(size, size, Gravity.TOP or Gravity.LEFT, touchable = false)
         val (cx, cy) = targetCenter
         params.x = (cx - size / 2).toInt()
         params.y = (cy - size / 2).toInt()
-        target = OverlayWindow(this, params) { DismissTarget(hot) }
-    }
-
-    private fun hideTarget() {
-        hot = false
-        target?.remove()
-        target = null
+        target = OverlayWindow(this, params) { DismissTarget(dragging, hot) }
     }
 
     private fun dismissPill() {
-        dismissed = docKey
+        dismissed = doc?.let { it.source to it.windowId }
         hidePill()
     }
 
@@ -398,6 +403,7 @@ class FineprintService : AccessibilityService() {
         mode = SheetMode.Hidden
         clearMark()
         pill?.view?.visibility = android.view.View.VISIBLE
+        schedule(200)
     }
 
     private fun select(finding: Finding) {
@@ -412,7 +418,7 @@ class FineprintService : AccessibilityService() {
 
     private fun switchModel(model: Model) {
         Prefs.setModel(model)
-        val current = doc ?: Checker.current.value?.let { Doc(it.clauses, it.source, -1) } ?: return
+        val current = doc ?: Checker.current.value?.let { Doc(it.clauses, it.source, -1, null) } ?: return
         docKey = Checker.check(current.clauses, current.source, model).key
     }
 
