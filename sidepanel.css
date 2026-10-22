@@ -129,7 +129,7 @@ button { font: inherit; color: inherit; }
   transition: translate 450ms var(--spring);
 }
 
-.segmented[data-model="tuned"] .segmented-thumb { translate: 100% 0; }
+.segmented[data-selected="tuned"] .segmented-thumb { translate: 100% 0; }
 
 .segmented button {
   position: relative;
@@ -755,7 +755,7 @@ button { font: inherit; color: inherit; }
 
 .card {
   position: relative;
-  transition: opacity 240ms var(--ease), translate 450ms var(--spring);
+  transition: opacity 200ms var(--ease) 120ms, translate 450ms var(--spring);
   @starting-style {
     opacity: 0;
     translate: 0 8px;

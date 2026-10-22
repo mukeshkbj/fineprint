@@ -275,6 +275,10 @@ function fluidHover(group) {
   const glow = group.querySelector(".hover");
   const cards = group.querySelector(".cards");
   let lit = null;
+  const place = (card) => {
+    glow.style.transform = `translateY(${card.offsetTop}px)`;
+    glow.style.height = `${card.offsetHeight}px`;
+  };
   const light = (card) => {
     if (card === lit) return;
     const entering = !lit;
@@ -283,12 +287,12 @@ function fluidHover(group) {
     if (!card) return glow.classList.remove("on");
     card.setAttribute("data-lit", "");
     glow.classList.toggle("instant", entering);
-    glow.style.transform = `translateY(${card.offsetTop}px)`;
-    glow.style.height = `${card.offsetHeight}px`;
+    place(card);
     if (entering) glow.getBoundingClientRect();
     glow.classList.remove("instant");
     glow.classList.add("on");
   };
+  new ResizeObserver(() => lit && place(lit)).observe(cards);
   cards.addEventListener("pointermove", (event) => {
     let nearest = null;
     let distance = Infinity;
@@ -334,7 +338,7 @@ const refreshSoon = () => {
 function selectModel(next) {
   model = next;
   chrome.storage.local.set({ model });
-  segmented.dataset.model = model;
+  segmented.dataset.selected = model;
   for (const radio of segmented.querySelectorAll("[role=radio]")) {
     const checked = radio.dataset.model === model;
     radio.setAttribute("aria-checked", checked);
