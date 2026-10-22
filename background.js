@@ -7,20 +7,40 @@ const KEPT_REPORTS = 30;
 const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[|[^.]+$)|\.(local|internal)$/;
 const jobs = new Map();
 const links = new Map();
+const outlines = new Map();
+const linked = new Map();
 let consentSync = Promise.resolve();
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
 
 chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true });
-  chrome.sidePanel.open({ tabId: tab.id });
+  openPanel(tab.id);
   chrome.runtime.sendMessage({ type: "activated", tabId: tab.id }).catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   halt(tabId);
   jobs.delete(tabId);
+  linked.delete(tabId);
 });
+
+chrome.tabs.onUpdated.addListener((tabId, change) => change.url && linked.delete(tabId));
+
+function openPanel(tabId) {
+  chrome.sidePanel.setOptions({ tabId, path: "sidepanel.html", enabled: true });
+  return chrome.sidePanel.open({ tabId });
+}
+
+function loaded(tabId) {
+  return new Promise((resolve) => {
+    const listener = (id, change) => {
+      if (id !== tabId || change.status !== "complete") return;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
 
 const endpoint = (model, path) => `http://127.0.0.1:${MODELS[model].port}${path}`;
 const reportKey = (model, url) => `report|${model}|${url.split("#")[0]}`;
@@ -40,16 +60,18 @@ async function inject(tabId, func, args = []) {
   return result;
 }
 
-async function pageOf(tabId, withText = false) {
-  const tab = await chrome.tabs.get(tabId);
+async function pageOf(tab, withText = false) {
   if (!/^(https?|file):/.test(tab.url ?? "")) return { readable: false };
   try {
-    const { selection, text } = await inject(tabId, readPage, [withText]);
-    return { readable: true, url: tab.url, selection, text };
+    const { selection, text } = await inject(tab.id, readPage, [withText]);
+    return { readable: true, url: tab.url, title: tab.title, selection, text };
   } catch {
     return { readable: false };
   }
 }
+
+const SEVERITY_MARK = { high: "h", medium: "m", low: "l" };
+const markOf = ({ reply, skipped }) => (skipped ? "s" : !reply ? "x" : reply.flags.length ? SEVERITY_MARK[CATEGORIES[reply.flags[0]].severity] : "-");
 
 async function health(model) {
   try {
@@ -87,8 +109,11 @@ async function run(job) {
   const worker = async () => {
     while (next < job.clauses.length && job.status === "running") {
       const index = next++;
-      const { reply, tokens, skipped } = await classify(job.model, job.clauses[index], job.controller.signal);
+      job.marks[index] = "r";
+      const result = await classify(job.model, job.clauses[index], job.controller.signal);
+      const { reply, tokens, skipped } = result;
       if (job.status !== "running") return;
+      job.marks[index] = markOf(result);
       job.done++;
       job.elapsed = Date.now() - startedAt;
       if (skipped) job.skipped++;
@@ -113,13 +138,16 @@ async function run(job) {
     }
   }
   job.elapsed = Date.now() - startedAt;
+  job.marks = job.marks.map((mark) => (mark === "r" ? "." : mark));
   if (job.status === "running") {
     job.status = "done";
     job.checkedAt = Date.now();
     job.findings.sort((a, b) => a.index - b.index);
   }
   broadcast(job);
-  if (job.status === "done" && (job.source === "page" || job.source === "link")) await saveReport(job);
+  if (job.status !== "done") return;
+  await chrome.storage.local.set({ [`pace|${job.model}`]: job.done / Math.max(job.elapsed / 1000, 0.001) });
+  if (job.source === "page" || job.source === "link") await saveReport(job);
 }
 
 async function saveReport(job) {
@@ -129,12 +157,13 @@ async function saveReport(job) {
   if (stale.length) await chrome.storage.local.remove(stale);
 }
 
-function createJob({ tabId = null, model, url, source, clauses, sides }) {
+function createJob({ tabId = null, model, url, title = "", source, clauses, sides }) {
   return {
     id: crypto.randomUUID(),
     tabId,
     model,
     url,
+    title,
     source,
     status: clauses.length ? "running" : "empty",
     total: clauses.length,
@@ -144,6 +173,8 @@ function createJob({ tabId = null, model, url, source, clauses, sides }) {
     tokens: 0,
     elapsed: 0,
     findings: [],
+    lengths: clauses.map((clause) => clause.length),
+    marks: clauses.map(() => "."),
     clauses,
     sides,
     controller: new AbortController(),
@@ -189,7 +220,9 @@ async function gradeLink(url, model, badgeTab) {
   if (await health(model) !== "ready") return { status: "offline" };
   const response = await fetch(url, { credentials: "omit" });
   if (!response.ok) return { status: "failed" };
-  const job = createJob({ model, url, source: "link", clauses: splitClauses(htmlToText(await response.text())) });
+  const html = await response.text();
+  const title = htmlToText(html.match(/<title[^>]*>([^<]*)/i)?.[1] ?? "").trim();
+  const job = createJob({ model, url, title, source: "link", clauses: splitClauses(htmlToText(html)) });
   job.badgeTab = badgeTab;
   if (job.status === "running") await run(job);
   return snapshot(job);
@@ -218,27 +251,42 @@ chrome.runtime.onInstalled.addListener(syncConsentScript);
 
 const handlers = {
   async view({ tabId, model }) {
-    const [page, server, granted] = await Promise.all([pageOf(tabId), health(model), chrome.permissions.contains(ALL_SITES)]);
+    const tab = await chrome.tabs.get(tabId);
+    const [page, server, granted, stored] = await Promise.all([
+      pageOf(tab, !outlines.has(tab.url)),
+      health(model),
+      chrome.permissions.contains(ALL_SITES),
+      chrome.storage.local.get(`pace|${model}`),
+    ]);
     if (!page.readable) return { readable: false, granted, server };
+    if (linked.has(tabId)) {
+      const job = await cachedReport(model, linked.get(tabId));
+      if (job) return { readable: true, granted, server, host: hostOf(page.url), selected: 0, outline: [], estimate: 0, job, other: null };
+    }
+    if (!outlines.has(page.url)) outlines.set(page.url, splitClauses(page.text).map((clause) => clause.length));
+    const outline = page.selection ? splitClauses(page.selection).map((clause) => clause.length) : outlines.get(page.url);
     const otherModel = model === "base" ? "tuned" : "base";
     const [job, other] = await Promise.all([lastReport(model, tabId, page.url), lastReport(otherModel, tabId, page.url)]);
     return {
       readable: true,
       granted,
       server,
+      title: page.title,
       host: hostOf(page.url),
       selected: page.selection.length,
+      outline,
+      estimate: outline.length / (stored[`pace|${model}`] ?? 5),
       job,
       other: other?.status === "done" ? other : null,
     };
   },
 
   async check({ tabId, model }) {
-    const page = await pageOf(tabId, true);
+    const page = await pageOf(await chrome.tabs.get(tabId), true);
     if (!page.readable) return { error: "unreadable" };
     halt(tabId);
     const source = page.selection ? "selection" : "page";
-    return start(createJob({ tabId, model, url: page.url, source, clauses: splitClauses(page.selection || page.text) }));
+    return start(createJob({ tabId, model, url: page.url, title: page.title, source, clauses: splitClauses(page.selection || page.text) }));
   },
 
   async diff({ tabId, model, before, after }) {
@@ -254,12 +302,25 @@ const handlers = {
   },
 
   async dismiss({ tabId }) {
+    linked.delete(tabId);
     if (jobs.get(tabId)?.status !== "running") jobs.delete(tabId);
     return null;
   },
 
+  async openLinked({ url }, sender) {
+    linked.set(sender.tab.id, url);
+    try {
+      await openPanel(sender.tab.id);
+      chrome.runtime.sendMessage({ type: "activated", tabId: sender.tab.id }).catch(() => {});
+    } catch {
+      linked.delete(sender.tab.id);
+      await chrome.tabs.create({ url, index: sender.tab.index + 1 });
+    }
+    return null;
+  },
+
   async pageText({ tabId }) {
-    const page = await pageOf(tabId, true);
+    const page = await pageOf(await chrome.tabs.get(tabId), true);
     return page.readable ? page.selection || page.text : "";
   },
 
@@ -267,8 +328,14 @@ const handlers = {
     return halt(tabId);
   },
 
-  async mark({ tabId, text, url }) {
-    const tab = await chrome.tabs.get(tabId);
+  async mark({ tabId, text, url, open }) {
+    let tab = await chrome.tabs.get(tabId);
+    if (open) {
+      tab = await chrome.tabs.create({ url, index: tab.index + 1 });
+      await loaded(tab.id);
+      tabId = tab.id;
+      tab = await chrome.tabs.get(tabId);
+    }
     if (tab.url?.split("#")[0] !== url.split("#")[0]) return { found: false };
     try {
       return { found: await inject(tabId, markClause, [text]) };

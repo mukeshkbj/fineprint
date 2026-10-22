@@ -27,6 +27,36 @@ const seconds = (ms) => `${ms < 10_000 ? (ms / 1000).toFixed(1) : Math.round(ms 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const labelsOf = (flags) => list.format(flags.map((flag) => CATEGORIES[flag].label));
 
+function duration(secondsLeft) {
+  if (secondsLeft < 50) return `${Math.max(5, Math.round(secondsLeft / 5) * 5)} s`;
+  const minutes = Math.round(secondsLeft / 60);
+  return minutes <= 1 ? "a minute" : `${minutes} minutes`;
+}
+
+function renderMap(container, lengths, marks = []) {
+  if (container.childElementCount !== lengths.length) {
+    const total = lengths.reduce((sum, length) => sum + length, 0) || 1;
+    const rows = Math.min(14, Math.max(2, Math.ceil(lengths.length / 8)));
+    container.replaceChildren(...lengths.map((length, index) => {
+      const line = document.createElement("span");
+      line.style.setProperty("--w", ((length * rows * 100) / total).toFixed(3));
+      line.style.setProperty("--i", index);
+      return line;
+    }));
+  }
+  marks.forEach((mark, index) => {
+    const line = container.children[index];
+    if (line.dataset.mark !== mark) line.dataset.mark = mark;
+  });
+}
+
+function renderDoc(root, title, meta) {
+  const heading = root.querySelector(".doc-title");
+  setText(heading, title);
+  heading.title = title;
+  setText(root.querySelector(".doc-meta"), meta.filter(Boolean).join(" · "));
+}
+
 function since(time) {
   const minutes = Math.round((time - Date.now()) / 60_000);
   if (minutes > -1) return "just now";
@@ -83,6 +113,10 @@ function renderSites(root) {
 function renderIntro(job) {
   const root = show(`intro|${model}`, "intro");
   renderSites(root);
+  const clauses = view.outline.length;
+  renderDoc(root, view.selected ? "Your selection" : view.title, [view.host, clauses && plural(clauses, "clause")]);
+  renderMap(root.querySelector(".map-bars"), view.outline);
+  root.querySelector(".map").hidden = !clauses;
   const action = root.querySelector(".intro-action");
   if (view.server === "offline") {
     if (!action.querySelector(".notice")) action.replaceChildren(offlineNotice());
@@ -96,8 +130,8 @@ function renderIntro(job) {
   check.querySelector(".hint").textContent =
     view.server === "loading" ? "The model is still loading. This takes a few seconds."
     : job?.status === "empty" ? `No terms found on ${view.host}. Select the terms and check again.`
-    : view.selected ? `${count.format(view.selected)} characters selected on ${view.host}.`
-    : `Reads ${view.host}. Select text to check only that part.`;
+    : !view.outline.length ? `No terms found on ${view.host}. Select the terms and check again.`
+    : `About ${duration(view.estimate)} with the ${MODELS[model].label.toLowerCase()} model.${view.selected ? "" : " Select text to check only part of the page."}`;
 }
 
 function renderDiffForm() {
@@ -129,7 +163,11 @@ function renderReport(job) {
   const root = show(`report|${job.id}|${model}`, "report");
   const running = job.status === "running";
   const diff = job.source === "diff";
+  const finishing = root.dataset.status === "running" && job.status === "done";
   root.dataset.status = job.status;
+  renderDoc(root,
+    diff ? "Two versions compared" : job.source === "selection" ? "Your selection" : job.title || hostOf(job.url),
+    [job.source === "link" && "Linked from this page", !diff && hostOf(job.url), plural(job.total, "clause"), job.checkedAt && `checked ${since(job.checkedAt)}`]);
 
   const shown = job.findings.filter((finding) => finding.side !== "old");
   const previous = job.findings.filter((finding) => finding.side === "old" || finding.side === "both");
@@ -140,6 +178,10 @@ function renderReport(job) {
   strip.style.setProperty("--index", "ABCDE".indexOf(grade));
   strip.setAttribute("aria-label", job.done ? `Grade ${grade}` : "No grade yet");
   for (const cell of strip.querySelectorAll(".cell")) cell.toggleAttribute("data-active", job.done > 0 && cell.dataset.grade === grade);
+  if (finishing && !reducedMotion.matches) {
+    strip.classList.add("stamp");
+    setTimeout(() => strip.classList.remove("stamp"), 900);
+  }
 
   const known = new Set(previous.flatMap((finding) => finding.flags));
   const { high, medium } = flagsBySeverity(shown);
@@ -157,12 +199,9 @@ function renderReport(job) {
     : running ? `Checking ${diff ? "both versions" : job.source === "selection" ? "your selection" : hostOf(job.url)} on this computer.`
     : `No serious or notable terms in ${plural(job.done, "clause")}.`);
 
-  root.querySelector(".meter").hidden = !running;
-  if (running) {
-    setText(root.querySelector(".meter-label"), `Clause ${count.format(job.done)} of ${count.format(job.total)}`);
-    setText(root.querySelector(".meter-time"), `${job.invalid ? `${count.format(job.invalid)} invalid · ` : ""}${seconds(job.elapsed)}`);
-    root.querySelector(".meter-fill").style.transform = `scaleX(${job.done / job.total})`;
-  }
+  setText(root.querySelector(".map-label"), running ? `Clause ${count.format(job.done)} of ${count.format(job.total)}` : "Where the flags are");
+  setText(root.querySelector(".map-time"), `${job.invalid ? `${count.format(job.invalid)} invalid · ` : ""}${seconds(job.elapsed)}`);
+  renderMap(root.querySelector(".map-bars"), job.lengths, job.marks);
 
   const outcome = root.querySelector(".outcome");
   const outcomeKey = running ? "" : `${job.status}|${job.skipped}`;
@@ -191,21 +230,23 @@ function renderReport(job) {
   compare.hidden = diff || job.status !== "done" || !view.other;
   if (!compare.hidden) {
     for (const report of [job, view.other]) {
-      const cell = (name, value) => (compare.querySelector(`[data-${report.model}="${name}"]`).textContent = value);
-      cell("grade", gradeOf(report.findings));
-      cell("flagged", count.format(report.findings.length));
-      cell("invalid", count.format(report.invalid));
-      cell("time", seconds(report.elapsed));
+      const column = compare.querySelector(`.compare-col[data-model="${report.model}"]`);
+      const value = (name, text) => setText(column.querySelector(`[data-value="${name}"]`), text);
+      column.toggleAttribute("data-current", report.model === model);
+      value("grade", gradeOf(report.findings));
+      column.querySelector('[data-value="grade"]').dataset.grade = gradeOf(report.findings);
+      value("flagged", count.format(report.findings.length));
+      value("invalid", count.format(report.invalid));
+      value("time", seconds(report.elapsed));
     }
-    compare.dataset.current = model;
   }
 
   renderFindings(root, added, job);
   const actions = root.querySelector(".report-actions");
   actions.hidden = running;
-  for (const button of actions.querySelectorAll("[data-for]")) button.hidden = (button.dataset.for === "diff") !== diff;
+  for (const button of actions.querySelectorAll("[data-for]")) button.hidden = !button.dataset.for.split(" ").includes(job.source);
   actions.querySelector('[data-action="check"]').disabled = view.server !== "ready";
-  setText(actions.querySelector(".checked-at"), job.checkedAt && !diff ? `Checked ${since(job.checkedAt)}` : "");
+  actions.querySelector('[data-action="open-terms"]').dataset.url = job.url ?? "";
 }
 
 function renderFindings(root, findings, job) {
@@ -225,6 +266,7 @@ function renderFindings(root, findings, job) {
       const total = group.querySelector(".cards").children.length;
       group.hidden = total === 0;
       group.querySelector(".group-count").textContent = total;
+      group.querySelector(".group-more").textContent = `Show ${count.format(total - 5)} more`;
     }
   });
 }
@@ -240,8 +282,13 @@ function createCard(finding, job) {
     label.textContent = CATEGORIES[flag].label;
     flags.append(label);
   }
+  card.querySelector(".card-number").textContent = `§ ${finding.index + 1}`;
   card.querySelector(".card-plain").textContent = finding.plain;
   card.querySelector(".card-quote").textContent = `“${finding.text}”`;
+  const line = () => current.root.querySelector(".map-bars").children[finding.index];
+  line().title = `§ ${finding.index + 1} · ${finding.flags.map((flag) => CATEGORIES[flag].label).join(", ")}`;
+  card.addEventListener("pointerenter", () => line().setAttribute("data-focus", ""));
+  card.addEventListener("pointerleave", () => line().removeAttribute("data-focus"));
   card.querySelector(".card-hit").addEventListener("click", () => select(card, finding, job));
   card.addEventListener("transitionend", () => card.style.removeProperty("transition-delay"), { once: true });
   return card;
@@ -259,7 +306,7 @@ async function select(card, finding, job) {
   });
   current.selected = card;
   if (job.source === "diff") return;
-  const { found } = await send({ type: "mark", tabId: job.tabId, url: job.url, text: finding.text });
+  const { found } = await send({ type: "mark", tabId, url: job.url, text: finding.text, open: job.source === "link" });
   card.classList.toggle("missing", !found);
 }
 
@@ -381,6 +428,10 @@ const actions = {
     render();
   },
   stop: () => send({ type: "stop", tabId }),
+  more(event) {
+    const group = event.target.closest(".group");
+    flip(current.root.querySelector(".findings"), () => group.setAttribute("data-expanded", ""));
+  },
   refresh,
   copy: copyCommand,
   "diff-form"() {
@@ -391,6 +442,9 @@ const actions = {
     editing = false;
     await send({ type: "dismiss", tabId });
     refresh();
+  },
+  "open-terms"(event) {
+    chrome.tabs.create({ url: event.target.dataset.url });
   },
   async "use-page"() {
     screen.querySelector('textarea[name="after"]').value = drafts.after = await send({ type: "pageText", tabId });
@@ -426,6 +480,14 @@ segmented.addEventListener("keydown", (event) => {
   segmented.querySelector(`[data-model="${model}"]`).focus();
 });
 screen.addEventListener("click", (event) => actions[event.target.closest("[data-action]")?.dataset.action]?.(event));
+screen.addEventListener("click", (event) => {
+  const line = event.target.closest(".map-bars > span");
+  const card = line && current.cards.get([...line.parentElement.children].indexOf(line));
+  if (!card) return;
+  card.closest(".group").setAttribute("data-expanded", "");
+  card.scrollIntoView({ block: "center", behavior: reducedMotion.matches ? "instant" : "smooth" });
+  card.querySelector(".card-hit").click();
+});
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "activated" && message.tabId === tabId) return refresh();
