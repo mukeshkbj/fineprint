@@ -846,7 +846,14 @@ button { font: inherit; color: inherit; }
 
 .report-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.checked-at {
+  margin: 0 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {

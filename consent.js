@@ -1,6 +1,6 @@
 (() => {
   const TERMS = /\b(terms|conditions|user agreement|terms of (service|use)|eula)\b/i;
-  const CONSENT = /\b(agree|accept|consent|acknowledge)\b/i;
+  const CONSENT = /\b(agree|accept|consent|acknowledg)/i;
   const COLORS = { A: ["#1e8a4c", "#fff"], B: ["#7db342", "#1c1a17"], C: ["#f2b705", "#1c1a17"], D: ["#ef7d00", "#1c1a17"], E: ["#e0451f", "#fff"] };
   const MAX_BADGES = 2;
   const seen = new WeakSet();
@@ -60,7 +60,7 @@
       root.querySelector(".text").textContent = `Reading terms · ${Math.round((message.done / message.total) * 100)}%`;
     });
 
-    chrome.runtime.sendMessage({ type: "grade", url }).then((result) => {
+    chrome.runtime.sendMessage({ type: "grade", url }).catch(() => ({ status: "failed" })).then((result) => {
       const [grade, text] = summary(result);
       button.dataset.state = result.status;
       const letter = root.querySelector(".letter");
@@ -77,12 +77,11 @@
 
   function scan() {
     for (const link of document.querySelectorAll("a[href]")) {
-      if (graded.size >= MAX_BADGES) return;
+      if (graded.size >= MAX_BADGES) return observer.disconnect();
       if (seen.has(link)) continue;
       seen.add(link);
       if (!TERMS.test(link.textContent) || !/^https?:/.test(link.href)) continue;
-      const context = link.closest("label, p, li, span, div")?.textContent ?? "";
-      if (!CONSENT.test(context) && !link.closest("form")) continue;
+      if (!CONSENT.test(link.closest("label, p, li, span, div")?.textContent ?? "")) continue;
       const url = link.href.split("#")[0];
       if (url === location.href.split("#")[0] || graded.has(url)) continue;
       graded.add(url);
@@ -91,9 +90,10 @@
   }
 
   let pending = 0;
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     clearTimeout(pending);
     pending = setTimeout(scan, 400);
-  }).observe(document.body, { childList: true, subtree: true });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
   scan();
 })();

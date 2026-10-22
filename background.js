@@ -1,11 +1,13 @@
-import { CATEGORIES, MODELS, SYSTEM_PROMPT, gradeOf, htmlToText, normalize, parseReply, splitClauses } from "./lib.js";
+import { ALL_SITES, CATEGORIES, MODELS, SYSTEM_PROMPT, flagsBySeverity, gradeOf, hostOf, htmlToText, normalize, parseReply, splitClauses } from "./lib.js";
 import { markClause, readPage } from "./page.js";
 
 const PARALLEL = 4;
 const REQUEST_TIMEOUT = 20_000;
-const ALL_SITES = { origins: ["<all_urls>"] };
+const KEPT_REPORTS = 30;
+const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[|[^.]+$)|\.(local|internal)$/;
 const jobs = new Map();
 const links = new Map();
+let consentSync = Promise.resolve();
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
 
@@ -15,15 +17,21 @@ chrome.action.onClicked.addListener((tab) => {
   chrome.runtime.sendMessage({ type: "activated", tabId: tab.id }).catch(() => {});
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  halt(tabId);
+  jobs.delete(tabId);
+});
+
 const endpoint = (model, path) => `http://127.0.0.1:${MODELS[model].port}${path}`;
 const reportKey = (model, url) => `report|${model}|${url.split("#")[0]}`;
 const selectedModel = async () => (await chrome.storage.local.get("model")).model ?? "base";
+
 function broadcast(job) {
   chrome.runtime.sendMessage({ type: "job", job: snapshot(job) }).catch(() => {});
   if (job.badgeTab) chrome.tabs.sendMessage(job.badgeTab, { type: "progress", url: job.url, done: job.done, total: job.total }).catch(() => {});
 }
 
-function snapshot({ controller, clauses, badgeTab, ...job }) {
+function snapshot({ controller, clauses, sides, badgeTab, ...job }) {
   return job;
 }
 
@@ -32,12 +40,12 @@ async function inject(tabId, func, args = []) {
   return result;
 }
 
-async function pageOf(tabId) {
+async function pageOf(tabId, withText = false) {
   const tab = await chrome.tabs.get(tabId);
-  if (!tab.url?.startsWith("http") && !tab.url?.startsWith("file:")) return { readable: false };
+  if (!/^(https?|file):/.test(tab.url ?? "")) return { readable: false };
   try {
-    const { selection, text } = await inject(tabId, readPage);
-    return { readable: true, url: tab.url, title: tab.title, selection, text };
+    const { selection, text } = await inject(tabId, readPage, [withText]);
+    return { readable: true, url: tab.url, selection, text };
   } catch {
     return { readable: false };
   }
@@ -67,7 +75,7 @@ async function classify(model, clause, signal) {
       max_tokens: 96,
     }),
   });
-  if (!response.ok) throw new Error(`The model server answered ${response.status}.`);
+  if (!response.ok) return { skipped: true };
   const body = await response.json();
   return { reply: parseReply(body.choices?.[0]?.message?.content ?? ""), tokens: body.usage?.completion_tokens ?? 0 };
 }
@@ -79,13 +87,16 @@ async function run(job) {
   const worker = async () => {
     while (next < job.clauses.length && job.status === "running") {
       const index = next++;
-      const { reply, tokens } = await classify(job.model, job.clauses[index], job.controller.signal);
+      const { reply, tokens, skipped } = await classify(job.model, job.clauses[index], job.controller.signal);
       if (job.status !== "running") return;
       job.done++;
-      job.tokens += tokens;
       job.elapsed = Date.now() - startedAt;
-      if (!reply) job.invalid++;
-      else if (reply.flags.length) job.findings.push({ index, text: job.clauses[index], ...reply });
+      if (skipped) job.skipped++;
+      else {
+        job.tokens += tokens;
+        if (!reply) job.invalid++;
+        else if (reply.flags.length) job.findings.push({ index, text: job.clauses[index], side: job.sides?.[index], ...reply });
+      }
       if (reply?.flags.length || Date.now() - lastBroadcast > 80) {
         lastBroadcast = Date.now();
         broadcast(job);
@@ -94,43 +105,86 @@ async function run(job) {
   };
   try {
     await Promise.all(Array.from({ length: PARALLEL }, worker));
-    if (job.status !== "running") return;
-    job.status = "done";
-    job.elapsed = Date.now() - startedAt;
-    job.findings.sort((a, b) => a.index - b.index);
-    if (job.source === "page" || job.source === "link") await chrome.storage.local.set({ [reportKey(job.model, job.url)]: snapshot(job) });
   } catch (error) {
-    if (job.status !== "running") return;
-    job.controller.abort();
-    job.elapsed = Date.now() - startedAt;
-    job.status = error instanceof TypeError || error.name === "TimeoutError" ? "offline" : "failed";
-    job.error = error.message;
+    if (job.status === "running") {
+      job.controller.abort();
+      job.status = error instanceof TypeError || error.name === "TimeoutError" ? "offline" : "failed";
+      job.error = error.message;
+    }
+  }
+  job.elapsed = Date.now() - startedAt;
+  if (job.status === "running") {
+    job.status = "done";
+    job.checkedAt = Date.now();
+    job.findings.sort((a, b) => a.index - b.index);
   }
   broadcast(job);
+  if (job.status === "done" && (job.source === "page" || job.source === "link")) await saveReport(job);
 }
 
-function createJob({ tabId = null, model, url, source, clauses }) {
+async function saveReport(job) {
+  await chrome.storage.local.set({ [reportKey(job.model, job.url)]: snapshot(job) });
+  const reports = Object.entries(await chrome.storage.local.get(null)).filter(([key]) => key.startsWith("report|"));
+  const stale = reports.sort(([, a], [, b]) => b.checkedAt - a.checkedAt).slice(KEPT_REPORTS).map(([key]) => key);
+  if (stale.length) await chrome.storage.local.remove(stale);
+}
+
+function createJob({ tabId = null, model, url, source, clauses, sides }) {
   return {
     id: crypto.randomUUID(),
     tabId,
     model,
     url,
-    host: new URL(url).host || "this file",
     source,
     status: clauses.length ? "running" : "empty",
     total: clauses.length,
     done: 0,
     invalid: 0,
+    skipped: 0,
     tokens: 0,
     elapsed: 0,
     findings: [],
     clauses,
+    sides,
     controller: new AbortController(),
   };
 }
 
+function start(job) {
+  jobs.set(job.tabId, job);
+  broadcast(job);
+  if (job.status === "running") run(job);
+  return snapshot(job);
+}
+
+function halt(tabId) {
+  const job = jobs.get(tabId);
+  if (job?.status !== "running") return null;
+  job.status = "stopped";
+  job.controller.abort();
+  broadcast(job);
+  return snapshot(job);
+}
+
+async function cachedReport(model, url) {
+  const key = reportKey(model, url);
+  return (await chrome.storage.local.get(key))[key] ?? null;
+}
+
+async function lastReport(model, tabId, url) {
+  const job = jobs.get(tabId);
+  if (job?.model === model && (job.source === "diff" || job.url === url)) return snapshot(job);
+  return cachedReport(model, url);
+}
+
+function mayFetch(url, pageUrl) {
+  const target = new URL(url);
+  if (!/^https?:$/.test(target.protocol)) return false;
+  return target.origin === new URL(pageUrl).origin || !PRIVATE_HOST.test(target.hostname);
+}
+
 async function gradeLink(url, model, badgeTab) {
-  const cached = await lastReport(model, null, url);
+  const cached = await cachedReport(model, url);
   if (cached?.status === "done") return cached;
   if (await health(model) !== "ready") return { status: "offline" };
   const response = await fetch(url, { credentials: "omit" });
@@ -143,12 +197,12 @@ async function gradeLink(url, model, badgeTab) {
 
 function badgeSummary(report) {
   if (report.status !== "done") return { status: report.status };
-  const flags = [...new Set(report.findings.flatMap((finding) => finding.flags))];
-  const labels = (severity) => flags.filter((flag) => CATEGORIES[flag].severity === severity).map((flag) => CATEGORIES[flag].label);
-  return { status: "done", grade: gradeOf(report.findings), high: labels("high"), medium: labels("medium"), model: report.model };
+  const { high, medium } = flagsBySeverity(report.findings);
+  const label = (flag) => CATEGORIES[flag].label;
+  return { status: "done", grade: gradeOf(report.findings), high: high.map(label), medium: medium.map(label) };
 }
 
-async function syncConsentScript() {
+async function applyConsentScript() {
   const registered = await chrome.scripting.getRegisteredContentScripts({ ids: ["consent"] });
   const granted = await chrome.permissions.contains(ALL_SITES);
   if (granted && !registered.length) {
@@ -157,57 +211,46 @@ async function syncConsentScript() {
   if (!granted && registered.length) await chrome.scripting.unregisterContentScripts({ ids: ["consent"] });
 }
 
+const syncConsentScript = () => (consentSync = consentSync.then(applyConsentScript).catch((error) => console.error(error)));
 chrome.permissions.onAdded.addListener(syncConsentScript);
 chrome.permissions.onRemoved.addListener(syncConsentScript);
 chrome.runtime.onInstalled.addListener(syncConsentScript);
 
-async function lastReport(model, tabId, url) {
-  const job = jobs.get(tabId);
-  if (job?.model === model && (job.url === url || job.source === "diff")) return snapshot(job);
-  const key = reportKey(model, url);
-  return (await chrome.storage.local.get(key))[key] ?? null;
-}
-
 const handlers = {
   async view({ tabId, model }) {
     const [page, server, granted] = await Promise.all([pageOf(tabId), health(model), chrome.permissions.contains(ALL_SITES)]);
-    if (!page.readable) return { page, granted, server, job: null, other: null };
+    if (!page.readable) return { readable: false, granted, server };
     const otherModel = model === "base" ? "tuned" : "base";
     const [job, other] = await Promise.all([lastReport(model, tabId, page.url), lastReport(otherModel, tabId, page.url)]);
     return {
+      readable: true,
       granted,
-      page: { readable: true, host: new URL(page.url).host || "this file", title: page.title, selection: page.selection.length, length: page.text.length },
       server,
+      host: hostOf(page.url),
+      selected: page.selection.length,
       job,
       other: other?.status === "done" ? other : null,
     };
   },
 
   async check({ tabId, model }) {
-    await handlers.stop({ tabId });
-    const page = await pageOf(tabId);
+    const page = await pageOf(tabId, true);
     if (!page.readable) return { error: "unreadable" };
+    halt(tabId);
     const source = page.selection ? "selection" : "page";
-    const job = createJob({ tabId, model, url: page.url, source, clauses: splitClauses(page.selection || page.text) });
-    jobs.set(tabId, job);
-    broadcast(job);
-    if (job.status === "running") run(job);
-    return snapshot(job);
+    return start(createJob({ tabId, model, url: page.url, source, clauses: splitClauses(page.selection || page.text) }));
   },
 
   async diff({ tabId, model, before, after }) {
-    await handlers.stop({ tabId });
-    const old = new Set(splitClauses(before).map(normalize));
-    const clauses = new Map();
-    for (const clause of splitClauses(before)) clauses.set(normalize(clause), { clause, side: "old" });
-    for (const clause of splitClauses(after)) clauses.set(normalize(clause), { clause, side: old.has(normalize(clause)) ? "both" : "new" });
-    const entries = [...clauses.values()];
-    const job = createJob({ tabId, model, url: "about:diff", source: "diff", clauses: entries.map((entry) => entry.clause) });
-    job.sides = entries.map((entry) => entry.side);
-    jobs.set(tabId, job);
-    broadcast(job);
-    if (job.status === "running") run(job);
-    return snapshot(job);
+    const previous = new Map(splitClauses(before).map((clause) => [normalize(clause), clause]));
+    const entries = new Map([...previous].map(([key, clause]) => [key, { clause, side: "old" }]));
+    for (const clause of splitClauses(after)) {
+      const key = normalize(clause);
+      entries.set(key, { clause, side: previous.has(key) ? "both" : "new" });
+    }
+    halt(tabId);
+    const clauses = [...entries.values()];
+    return start(createJob({ tabId, model, url: null, source: "diff", clauses: clauses.map((entry) => entry.clause), sides: clauses.map((entry) => entry.side) }));
   },
 
   async dismiss({ tabId }) {
@@ -216,17 +259,12 @@ const handlers = {
   },
 
   async pageText({ tabId }) {
-    const page = await pageOf(tabId);
+    const page = await pageOf(tabId, true);
     return page.readable ? page.selection || page.text : "";
   },
 
   async stop({ tabId }) {
-    const job = jobs.get(tabId);
-    if (job?.status !== "running") return null;
-    job.status = "stopped";
-    job.controller.abort();
-    broadcast(job);
-    return snapshot(job);
+    return halt(tabId);
   },
 
   async mark({ tabId, text, url }) {
@@ -239,12 +277,11 @@ const handlers = {
     }
   },
 
-  health: ({ model }) => health(model),
-
   async grade({ url }, sender) {
+    if (!sender.tab || !mayFetch(url, sender.tab.url)) return { status: "failed" };
     const model = await selectedModel();
     const key = `${model}|${url}`;
-    if (!links.has(key)) links.set(key, gradeLink(url, model, sender.tab?.id).catch(() => ({ status: "failed" })).finally(() => setTimeout(() => links.delete(key), 5000)));
+    if (!links.has(key)) links.set(key, gradeLink(url, model, sender.tab.id).catch(() => ({ status: "failed" })).finally(() => setTimeout(() => links.delete(key), 5000)));
     return badgeSummary(await links.get(key));
   },
 };

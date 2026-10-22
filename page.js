@@ -1,7 +1,7 @@
-export function readPage() {
+export function readPage(withText) {
   const selection = getSelection().toString().trim();
   const root = document.querySelector("main") ?? document.querySelector("article") ?? document.body;
-  return { selection, text: root.innerText };
+  return { selection, text: withText ? root.innerText : "" };
 }
 
 export function markClause(clause) {

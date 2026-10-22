@@ -1,9 +1,11 @@
 export const SYSTEM_PROMPT = 'You read one clause from a Terms of Service. Reply with JSON only: {"flags": [...], "plain": "..."}. "flags" lists every category that applies, chosen from: limitation_of_liability, unilateral_termination, unilateral_change, content_removal, contract_by_using, choice_of_law, jurisdiction, arbitration. "plain" is one short sentence that tells the user what they agree to. If the clause is harmless, reply {"flags": [], "plain": ""}.';
 
 export const MODELS = {
-  base: { port: 8080, label: "Base" },
-  tuned: { port: 8081, label: "Fine-tuned" },
+  base: { port: 8080, label: "Base", command: "llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF:Q8_0 --port 8080 -np 4 -c 16384" },
+  tuned: { port: 8081, label: "Fine-tuned", command: "llama-server -m fineprint-Q8_0.gguf --port 8081 -np 4 -c 16384" },
 };
+
+export const ALL_SITES = { origins: ["<all_urls>"] };
 
 export const SEVERITIES = ["high", "medium", "low"];
 
@@ -22,6 +24,7 @@ const MAX_CLAUSES = 400;
 const MIN_CLAUSE_LENGTH = 40;
 const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
 
+export const hostOf = (url) => new URL(url).host || "this file";
 export const collapse = (text) => text.replace(/\s+/g, " ").trim();
 export const normalize = (clause) => collapse(clause.toLowerCase());
 
@@ -59,12 +62,15 @@ const rank = (flag) => SEVERITIES.indexOf(CATEGORIES[flag].severity);
 
 export const severityOf = (flags) => CATEGORIES[flags[0]].severity;
 
+export function flagsBySeverity(findings) {
+  const flags = [...new Set(findings.flatMap((finding) => finding.flags))];
+  return Object.fromEntries(SEVERITIES.map((severity) => [severity, flags.filter((flag) => CATEGORIES[flag].severity === severity)]));
+}
+
 export function gradeOf(findings) {
-  const distinct = new Set(findings.flatMap((finding) => finding.flags));
-  const count = (severity) => [...distinct].filter((flag) => CATEGORIES[flag].severity === severity).length;
-  const high = count("high");
-  if (high === 0) return count("medium") === 0 ? "A" : "B";
-  return "CDE"[Math.min(high, 3) - 1];
+  const { high, medium } = flagsBySeverity(findings);
+  if (high.length === 0) return medium.length === 0 ? "A" : "B";
+  return "CDE"[Math.min(high.length, 3) - 1];
 }
 
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", mdash: "—", ndash: "–", hellip: "…" };

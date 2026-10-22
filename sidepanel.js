@@ -1,31 +1,39 @@
-import { CATEGORIES, MODELS, SEVERITIES, gradeOf, severityOf } from "./lib.js";
+import { ALL_SITES, CATEGORIES, MODELS, SEVERITIES, flagsBySeverity, gradeOf, hostOf, severityOf } from "./lib.js";
 
-const COMMANDS = {
-  base: "llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF:Q8_0 --port 8080 -np 4 -c 16384",
-  tuned: "llama-server -m fineprint-Q8_0.gguf --port 8081 -np 4 -c 16384",
-};
 const GROUPS = { high: "Serious", medium: "Worth knowing", low: "Minor" };
 const SERVER_TEXT = { ready: "Ready", loading: "Loading", offline: "Not running" };
 const SPRING = "linear(0, 0.03 2.6%, 0.152 7%, 0.305 11.5%, 0.453 15.9%, 0.58 20.4%, 0.684 24.8%, 0.765 29.3%, 0.828 33.7%, 0.874 38.1%, 0.909 42.6%, 0.934 47%, 0.953 51.5%, 0.966 55.9%, 0.976 60.4%, 0.983 64.8%, 0.988 69.3%, 0.991 73.7%, 0.994 78.1%, 0.996 82.6%, 0.997 87%, 0.998 91.5%, 0.999 95.9%, 1)";
+const POLL = 2500;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const count = new Intl.NumberFormat("en");
 const list = new Intl.ListFormat("en", { type: "conjunction" });
+const ago = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
 const screen = document.getElementById("screen");
 const server = document.getElementById("server");
 const segmented = document.querySelector(".segmented");
 
 let model = (await chrome.storage.local.get("model")).model ?? "base";
-let tabId = null;
+const [{ id: tabId }] = await chrome.tabs.query({ active: true, currentWindow: true });
 let view = null;
 let current = { key: null, root: null };
 let editing = false;
+let diffHint = "";
 const drafts = { before: "", after: "" };
 
 const send = (message) => chrome.runtime.sendMessage(message);
 const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
 const seconds = (ms) => `${ms < 10_000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)} s`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const labelsOf = (flags) => list.format(flags.map((flag) => CATEGORIES[flag].label));
+
+function since(time) {
+  const minutes = Math.round((time - Date.now()) / 60_000);
+  if (minutes > -1) return "just now";
+  if (minutes > -60) return ago.format(minutes, "minute");
+  if (minutes > -1440) return ago.format(Math.round(minutes / 60), "hour");
+  return ago.format(Math.round(minutes / 1440), "day");
+}
 
 function show(key, template) {
   if (current.key === key) return current.root;
@@ -53,10 +61,9 @@ function render() {
   document.getElementById("server-text").textContent = `${MODELS[model].label} model on port ${MODELS[model].port} · ${SERVER_TEXT[view?.server] ?? "Checking"}`;
   if (!view) return;
   if (editing) return renderDiffForm();
-  if (!view.page.readable) return renderUnreadable();
-  const job = view.job;
-  if (!job || job.status === "empty") return renderIntro(job);
-  renderReport(job);
+  if (!view.readable) return renderUnreadable();
+  if (!view.job || view.job.status === "empty") return renderIntro(view.job);
+  renderReport(view.job);
 }
 
 function renderUnreadable() {
@@ -71,7 +78,6 @@ function renderUnreadable() {
 function renderSites(root) {
   const setting = root.querySelector(".setting") ?? root.appendChild(clone("sites"));
   setting.querySelector("button").textContent = view.granted ? "Turn off" : "Turn on";
-  setting.dataset.on = view.granted;
 }
 
 function renderIntro(job) {
@@ -85,71 +91,70 @@ function renderIntro(job) {
   const check = action.querySelector(".check") ?? action.appendChild(clone("check"));
   action.querySelector(".notice")?.remove();
   const button = check.querySelector("button");
-  const { selection, host } = view.page;
-  button.textContent = selection ? "Check selection" : "Check this page";
+  button.textContent = view.selected ? "Check selection" : "Check this page";
   button.disabled = view.server !== "ready";
   check.querySelector(".hint").textContent =
     view.server === "loading" ? "The model is still loading. This takes a few seconds."
-    : job?.status === "empty" ? `No terms found on ${host}. Select the terms and check again.`
-    : selection ? `${count.format(selection)} characters selected on ${host}.`
-    : `Reads ${host}. Select text to check only that part.`;
+    : job?.status === "empty" ? `No terms found on ${view.host}. Select the terms and check again.`
+    : view.selected ? `${count.format(view.selected)} characters selected on ${view.host}.`
+    : `Reads ${view.host}. Select text to check only that part.`;
 }
 
-function renderDiffForm(hint = "") {
+function renderDiffForm() {
   const root = show(`diff|${model}`, "diff");
-  const fields = root.querySelectorAll("textarea");
   if (!root.dataset.ready) {
     root.dataset.ready = "";
-    for (const field of fields) {
+    for (const field of root.querySelectorAll("textarea")) {
       field.value = drafts[field.name];
-      field.addEventListener("input", () => (drafts[field.name] = field.value));
+      field.addEventListener("input", () => {
+        drafts[field.name] = field.value;
+        diffHint = "";
+      });
     }
   }
-  root.querySelector('[data-action="use-page"]').hidden = !view.page.readable;
+  root.querySelector('[data-action="use-page"]').hidden = !view.readable;
   root.querySelector('[data-action="diff"]').disabled = view.server !== "ready";
-  root.querySelector(".hint").textContent = hint || (view.server === "ready" ? "Both versions are checked on this computer." : "Start the local model to compare.");
+  root.querySelector(".hint").textContent = diffHint || (view.server === "ready" ? "Both versions are checked on this computer." : "Start the local model to compare.");
 }
 
 function offlineNotice(title, text) {
   const notice = clone("offline");
   if (title) notice.querySelector(".notice-title").textContent = title;
   if (text) notice.querySelector(".notice-text").textContent = text;
-  notice.querySelector("code").textContent = COMMANDS[model];
+  notice.querySelector("code").textContent = MODELS[model].command;
   return notice;
 }
 
 function renderReport(job) {
-  const root = show(`report|${job.id ?? job.url}|${model}`, "report");
+  const root = show(`report|${job.id}|${model}`, "report");
   const running = job.status === "running";
+  const diff = job.source === "diff";
   root.dataset.status = job.status;
 
-  const diff = job.source === "diff";
-  const side = (finding) => job.sides?.[finding.index] ?? "new";
-  const findings = diff ? job.findings.filter((finding) => side(finding) !== "old") : job.findings;
-  const grade = gradeOf(findings);
+  const shown = job.findings.filter((finding) => finding.side !== "old");
+  const previous = job.findings.filter((finding) => finding.side === "old" || finding.side === "both");
+  const added = job.findings.filter((finding) => finding.side !== "old" && finding.side !== "both");
+  const grade = gradeOf(shown);
   const strip = root.querySelector(".strip");
   strip.dataset.grade = job.done ? grade : "";
   strip.style.setProperty("--index", "ABCDE".indexOf(grade));
   strip.setAttribute("aria-label", job.done ? `Grade ${grade}` : "No grade yet");
   for (const cell of strip.querySelectorAll(".cell")) cell.toggleAttribute("data-active", job.done > 0 && cell.dataset.grade === grade);
 
-  const previous = job.findings.filter((finding) => side(finding) !== "new");
-  const known = new Set(diff ? previous.flatMap((finding) => finding.flags) : []);
-  const flags = [...new Set(findings.flatMap((finding) => finding.flags))].filter((flag) => !known.has(flag));
-  const distinct = (severity) => flags.filter((flag) => CATEGORIES[flag].severity === severity);
-  const high = distinct("high");
-  const medium = distinct("medium");
-  const fresh = diff ? "new " : "";
-  const headline = high.length ? plural(high.length, `${fresh}serious term`)
-    : medium.length ? `${plural(medium.length, `${fresh}term`)} worth knowing`
+  const known = new Set(previous.flatMap((finding) => finding.flags));
+  const { high, medium } = flagsBySeverity(shown);
+  const fresh = (flags) => flags.filter((flag) => !known.has(flag));
+  const [newHigh, newMedium] = [fresh(high), fresh(medium)];
+  const prefix = diff ? "new " : "";
+  const headline = newHigh.length ? plural(newHigh.length, `${prefix}serious term`)
+    : newMedium.length ? `${plural(newMedium.length, `${prefix}term`)} worth knowing`
     : diff ? "nothing new to worry about" : "nothing unfair found";
-  const verdict = !job.done ? "Reading the terms" : running ? `So far, ${headline}` : headline[0].toUpperCase() + headline.slice(1);
-  setText(root.querySelector(".verdict"), verdict);
-  const labels = list.format([...high, ...medium].map((flag) => CATEGORIES[flag].label));
+  setText(root.querySelector(".verdict"), !job.done ? "Reading the terms" : running ? `So far, ${headline}` : headline[0].toUpperCase() + headline.slice(1));
+  const labels = labelsOf([...newHigh, ...newMedium]);
   setText(root.querySelector(".verdict-detail"),
     diff && job.done ? `Grade ${gradeOf(previous)} before, ${grade} now.${labels ? ` New: ${labels}.` : ""}`
     : labels ? `${labels}.`
-    : running ? `Checking ${diff ? "both versions" : job.source === "selection" ? "your selection" : job.host} on this computer.`
+    : running ? `Checking ${diff ? "both versions" : job.source === "selection" ? "your selection" : hostOf(job.url)} on this computer.`
     : `No serious or notable terms in ${plural(job.done, "clause")}.`);
 
   root.querySelector(".meter").hidden = !running;
@@ -160,7 +165,7 @@ function renderReport(job) {
   }
 
   const outcome = root.querySelector(".outcome");
-  const outcomeKey = running || job.status === "done" ? "" : job.status;
+  const outcomeKey = running ? "" : `${job.status}|${job.skipped}`;
   if (outcome.dataset.key !== outcomeKey) {
     outcome.dataset.key = outcomeKey;
     const partial = `after ${count.format(job.done)} of ${count.format(job.total)} clauses`;
@@ -168,6 +173,7 @@ function renderReport(job) {
       job.status === "offline" ? offlineNotice("The model stopped answering", `It stopped ${partial}. Start it again with this command, then check again.`)
       : job.status === "stopped" ? paragraph(`Stopped ${partial}. The grade covers only those.`)
       : job.status === "failed" ? paragraph(`${job.error} The check stopped ${partial}.`)
+      : job.status === "done" && job.skipped ? paragraph(`The model could not read ${plural(job.skipped, "clause")}, usually because ${job.skipped === 1 ? "it was" : "they were"} too long. The grade leaves ${job.skipped === 1 ? "it" : "them"} out.`)
       : "",
     );
   }
@@ -182,7 +188,7 @@ function renderReport(job) {
   }
 
   const compare = root.querySelector(".compare");
-  compare.hidden = !(job.status === "done" && view.other) || diff;
+  compare.hidden = diff || job.status !== "done" || !view.other;
   if (!compare.hidden) {
     for (const report of [job, view.other]) {
       const cell = (name, value) => (compare.querySelector(`[data-${report.model}="${name}"]`).textContent = value);
@@ -194,11 +200,12 @@ function renderReport(job) {
     compare.dataset.current = model;
   }
 
-  renderFindings(root, diff ? job.findings.filter((finding) => side(finding) === "new") : job.findings, job);
+  renderFindings(root, added, job);
   const actions = root.querySelector(".report-actions");
   actions.hidden = running;
   for (const button of actions.querySelectorAll("[data-for]")) button.hidden = (button.dataset.for === "diff") !== diff;
   actions.querySelector('[data-action="check"]').disabled = view.server !== "ready";
+  setText(actions.querySelector(".checked-at"), job.checkedAt && !diff ? `Checked ${since(job.checkedAt)}` : "");
 }
 
 function renderFindings(root, findings, job) {
@@ -323,17 +330,23 @@ function stat(stats, name, value) {
   return element;
 }
 
-async function refresh() {
-  view = await send({ type: "view", tabId, model });
-  render();
-}
+let refreshing = null;
+let stale = false;
 
-let refreshing = 0;
-const refreshSoon = () => {
-  if (Date.now() - refreshing < 500) return;
-  refreshing = Date.now();
-  refresh();
-};
+async function refresh() {
+  if (refreshing) {
+    stale = true;
+    return refreshing;
+  }
+  refreshing = send({ type: "view", tabId, model });
+  view = await refreshing;
+  refreshing = null;
+  render();
+  if (stale) {
+    stale = false;
+    refresh();
+  }
+}
 
 function selectModel(next) {
   model = next;
@@ -348,6 +361,60 @@ function selectModel(next) {
   refresh();
 }
 
+async function copyCommand(event) {
+  const notice = event.target.closest(".notice");
+  const status = notice.querySelector("[data-copied]");
+  await navigator.clipboard.writeText(notice.querySelector("code").textContent);
+  notice.classList.add("copied");
+  status.textContent = "Copied";
+  setTimeout(() => {
+    notice.classList.remove("copied");
+    status.textContent = "";
+  }, 1600);
+}
+
+const actions = {
+  async check() {
+    const job = await send({ type: "check", tabId, model });
+    if (job.error) return refresh();
+    view = { ...view, job };
+    render();
+  },
+  stop: () => send({ type: "stop", tabId }),
+  refresh,
+  copy: copyCommand,
+  "diff-form"() {
+    editing = true;
+    render();
+  },
+  async home() {
+    editing = false;
+    await send({ type: "dismiss", tabId });
+    refresh();
+  },
+  async "use-page"() {
+    screen.querySelector('textarea[name="after"]').value = drafts.after = await send({ type: "pageText", tabId });
+  },
+  async diff() {
+    if (!drafts.before.trim() || !drafts.after.trim()) {
+      diffHint = "Paste both versions first.";
+      return render();
+    }
+    const job = await send({ type: "diff", tabId, model, ...drafts });
+    if (job.status === "empty") {
+      diffHint = "Fineprint found no clauses to compare. Paste longer passages.";
+      return render();
+    }
+    editing = false;
+    view = { ...view, job };
+    render();
+  },
+  async sites() {
+    await (view.granted ? chrome.permissions.remove(ALL_SITES) : chrome.permissions.request(ALL_SITES));
+    refresh();
+  },
+};
+
 segmented.addEventListener("click", (event) => {
   const radio = event.target.closest("[role=radio]");
   if (radio && radio.dataset.model !== model) selectModel(radio.dataset.model);
@@ -358,76 +425,18 @@ segmented.addEventListener("keydown", (event) => {
   selectModel(model === "base" ? "tuned" : "base");
   segmented.querySelector(`[data-model="${model}"]`).focus();
 });
-
-screen.addEventListener("click", async (event) => {
-  const action = event.target.closest("[data-action]")?.dataset.action;
-  if (action === "check") {
-    const job = await send({ type: "check", tabId, model });
-    if (job.error) return refresh();
-    view = { ...view, job };
-    render();
-  }
-  if (action === "stop") send({ type: "stop", tabId });
-  if (action === "diff-form") {
-    editing = true;
-    render();
-  }
-  if (action === "home") {
-    editing = false;
-    await send({ type: "dismiss", tabId });
-    refresh();
-  }
-  if (action === "use-page") {
-    const field = screen.querySelector('textarea[name="after"]');
-    field.value = drafts.after = await send({ type: "pageText", tabId });
-  }
-  if (action === "diff") {
-    if (!drafts.before.trim() || !drafts.after.trim()) return renderDiffForm("Paste both versions first.");
-    const job = await send({ type: "diff", tabId, model, ...drafts });
-    if (job.status === "empty") return renderDiffForm("Fineprint found no clauses to compare. Paste longer passages.");
-    editing = false;
-    view = { ...view, job };
-    render();
-  }
-  if (action === "refresh") refresh();
-  if (action === "sites") {
-    const origins = { origins: ["<all_urls>"] };
-    await (view.granted ? chrome.permissions.remove(origins) : chrome.permissions.request(origins));
-    refresh();
-  }
-  if (action === "copy") {
-    const notice = event.target.closest(".notice");
-    await navigator.clipboard.writeText(notice.querySelector("code").textContent);
-    notice.classList.add("copied");
-    notice.querySelector("[data-copied]").textContent = "Copied";
-    setTimeout(() => {
-      notice.classList.remove("copied");
-      notice.querySelector("[data-copied]").textContent = "";
-    }, 1600);
-  }
-});
+screen.addEventListener("click", (event) => actions[event.target.closest("[data-action]")?.dataset.action]?.(event));
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "activated" && message.tabId === tabId) return refresh();
-  if (message.type !== "job" || message.job.tabId !== tabId) return;
-  if (message.job.model !== model) return;
+  if (message.type !== "job" || message.job.tabId !== tabId || message.job.model !== model) return;
   const finished = view?.job?.status === "running" && message.job.status !== "running";
   view = { ...view, job: message.job };
   render();
   if (finished) refresh();
 });
-
-[{ id: tabId }] = await chrome.tabs.query({ active: true, currentWindow: true });
 chrome.tabs.onUpdated.addListener((id, change) => id === tabId && change.status === "complete" && refresh());
-document.addEventListener("pointerenter", refreshSoon);
-addEventListener("focus", refreshSoon);
-setInterval(async () => {
-  if (document.hidden || !view || view.job?.status === "running") return;
-  const state = await send({ type: "health", model });
-  if (state !== view.server) {
-    view = { ...view, server: state };
-    render();
-  }
-}, 2500);
+addEventListener("focus", refresh);
+setInterval(() => !document.hidden && view?.job?.status !== "running" && refresh(), POLL);
 
 selectModel(model);
